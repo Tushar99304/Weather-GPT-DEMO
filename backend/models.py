@@ -105,6 +105,25 @@ class ForecastDay(BaseModel):
     units: Dict[str, str] = Field(default_factory=dict)
 
 
+class HourlyForecastPoint(BaseModel):
+    """One hourly forecast step (ADDITIVE, integration build). The same normalised,
+    provider-independent rules as everything else in the WeatherBundle: times are the
+    provider's LOCAL wall time at the asked-of place, and every value is the provider's
+    own number — never derived, filled or invented client-side. Used only for the hourly
+    UI strip; it is part of the Evidence object so the LLM sees exactly what the UI shows,
+    but no advisory/validation rule depends on it (Phase 3 invariants are unchanged)."""
+
+    time: str                       # local wall time at the location ("2026-09-03T14:00")
+    temperature_c: Optional[float] = None
+    precipitation_mm: Optional[float] = None
+    precipitation_probability_pct: Optional[float] = None
+    humidity_pct: Optional[float] = None
+    wind_speed_kmh: Optional[float] = None
+    weather_code: Optional[int] = None
+    condition: Optional[str] = None
+    units: Dict[str, str] = Field(default_factory=dict)
+
+
 class WeatherBundle(BaseModel):
     """What the weather provider returned for this location/request."""
 
@@ -125,6 +144,10 @@ class WeatherBundle(BaseModel):
     tomorrow: Optional[ForecastDay] = None
     target_day: Optional[ForecastDay] = None   # explicit date asked for ("on 2026-08-25")
     past_days: List[ForecastDay] = Field(default_factory=list)
+    # ADDITIVE (integration build): next ~24h of hourly steps for the dashboard strip.
+    # Empty for historical/archive calls (the archive path does not set it). Present only on
+    # live forecast fetches. Never populated from anything except the provider response.
+    hourly: List[HourlyForecastPoint] = Field(default_factory=list)
     requested_parameters: List[str] = Field(default_factory=list)
     request_url: str = ""           # exact URL called -> reproducible in front of judges
 
@@ -364,6 +387,16 @@ class QueryRequest(BaseModel):
     session_id: Optional[str] = None
     location_hint: Optional[str] = None    # e.g. user tapped "Pune, Maharashtra" in the UI
     include_pipeline: bool = True          # stage-by-stage trace: gold for judging/demo
+    # ADDITIVE (integration build): the UI's advisory page asks about a specific sector
+    # (driving/marine/agriculture/...). The value is passed straight through to the
+    # deterministic advisory engine (Advisory.activity); it never changes risk logic,
+    # thresholds or alert precedence — only which evidence the advisory emphasises.
+    activity: Optional[str] = None
+    # ADDITIVE: coordinates are only used when the message names no place AND a browser
+    # geolocation fix is supplied (e.g. "use my location"). Bypasses geocoding; never
+    # overrides a place the user explicitly named.
+    latitude: Optional[float] = Field(default=None, ge=-90, le=90)
+    longitude: Optional[float] = Field(default=None, ge=-180, le=180)
 
 
 class ParsedQuery(BaseModel):

@@ -46,9 +46,27 @@ export const QueryRoutingBreakdown: React.FC<QueryRoutingBreakdownProps> = ({ an
             </div>
           </div>
 
-          <div className="flex items-center justify-between text-[11px] text-[#6B7D74] pt-1">
-            <span>Sources Queried: <strong>{analysis.dataSourcesUsed.join(' + ')}</strong></span>
-            <span className="text-[#2E7D5B] font-semibold">Validation: {analysis.validationStatus}</span>
+          <div className="flex items-center justify-between text-[11px] text-[#6B7D74] pt-1 flex-wrap gap-1">
+            <span>Sources: <strong>{analysis.dataSourcesUsed.join(' + ')}</strong></span>
+            <span
+              className={`font-semibold ${
+                analysis.validationStatus === 'ABSTAINED' || analysis.validationStatus === 'CLARIFICATION_NEEDED'
+                  ? 'text-amber-700'
+                  : analysis.validationStatus === 'SAMPLE_DATA'
+                  ? 'text-amber-600'
+                  : 'text-[#2E7D5B]'
+              }`}
+            >
+              Status: {analysis.validationStatus.replace(/_/g, ' ')}
+            </span>
+          </div>
+
+          <div className="text-[10px] text-[#6B7D74] pt-1 border-t border-[#DCEAE2] mt-1">
+            Answer origin: <strong>{analysis.answerOrigin === 'groq_llm' ? 'LLM (grounded & verified)' : analysis.answerOrigin === 'deterministic_fallback' ? 'Deterministic evidence-based fallback' : '—'}</strong>
+            {analysis.groundingVerified != null && (
+              <> · grounding <strong>{analysis.groundingVerified ? 'verified' : 'not verified'}</strong></>
+            )}
+            {analysis.groundingNote ? ` · ${analysis.groundingNote}` : ''}
           </div>
         </div>
       )}

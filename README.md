@@ -96,31 +96,52 @@ python scripts/demo_phase4.py             # 7 grounding cases: accept / hallucin
 ## 2. Tests
 
 ```bash
-python -m pytest tests                 # 208 tests: 194 offline logic + 14 live network
+python -m pytest tests                 # full suite (offline logic + a few live-network tests)
 python -m pytest tests -m "not live"   # no internet needed (hotel Wi-Fi / judges' laptop)
 python -m pytest tests -v -k alerts    # Phase 2 only
 python -m pytest tests -v -k phase3    # Phase 3 (validation / quality / advisory), all offline
 python -m pytest tests -v -k phase4    # Phase 4 (grounding checks + every LLM failure mode), offline
 python -m pytest tests -v -k phase5a   # Phase 5A (provider registry + model metadata), all offline
 python -m pytest tests -v -k u1        # U1 (instruction surfacing, precedence, hazard scenarios), offline
-node scripts/check_frontend_render.mjs # 8 render cases for the page incl. the U1 alert UX, no backend needed
+python -m pytest tests -v -k u2        # U2 (integration additions: advisory activity, hourly, climate), offline
+node scripts/check_frontend_render.mjs # 8 render cases for the REFERENCE page (frontend-old/), incl. U1 alert UX
+node scripts/check_frontend.mjs        # React/Vite gate: oxlint + tsc + vite build + 14 mapper tests (8 fixtures)
+node scripts/smoke_e2e.mjs             # integrated-app smoke (SPA serving, abstain/unavailable/activity/coords), offline
 python -m pytest tests -v -k geocoding # single area
 ```
 
 The Phase-2 offline tests never touch the network: they replay the real feed/CAP files saved in
 `refs/` and inject a fixed `now`, so the timestamp verdicts stay reproducible after the live
-records expire. Only `tests/test_phase1_live.py` and `tests/test_phase2_live.py` make calls.
+records expire. The `@live` tests make real network calls and are skipped/deselected with
+`-m "not live"`.
+
+**Frontends.** The production UI is the React + TypeScript + Vite app in `frontend/`. It calls
+the backend over relative URLs (`/api/...`, `/health`): in dev, `npm run dev` (port 5173) proxies
+them to the FastAPI server (`VITE_PROXY_TARGET`, default `http://localhost:8000`); in production
+`npm run build` emits `frontend/dist/` which FastAPI serves itself (same origin). The app uses the
+real pipeline by default; the labelled **SAMPLE DATA** mode (off by default) shows bundled demo
+content and is always badged as non-official. `frontend-old/` is the previous single-file UI, kept
+as a reference/fallback (served nowhere automatically; its offline render gate still runs).
 
 ## 3. API surface
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/api/query` | `{ "message": "...", "location_hint"?: "...", "include_pipeline"?: true }` → status + Evidence (+trace) |
-| `GET` | `/api/pipeline?message=` | same pipeline, GET form (easy curl/PowerShell/browser) |
+| `POST` | `/api/query` | `{ "message", "location_hint"?, "include_pipeline"?, "activity"?, "latitude"?, "longitude"? }` → status + Evidence (+trace) |
+| `GET` | `/api/pipeline?message=&activity=&latitude=&longitude=` | same pipeline, GET form (easy curl/PowerShell/browser) |
+| `POST` | `/api/advisory` | deterministic sector advisory for a place/activity (same engine; `?activity=marine` etc.) |
+| `GET` | `/api/overview` | **additive** read-only current-conditions summary for the dashboard map |
+| `GET` | `/api/climate?place=` | **additive** multi-year trends from the Open-Meteo ARCHIVE (research/repro, never IMD) |
 | `GET` | `/api/geocode?name=&context=` | component test for place resolution |
 | `GET` | `/api/weather?latitude=&longitude=&timeframe=` | component test for raw weather retrieval |
 | `GET` | `/api/alerts?place=&context=` | **Phase 2** component test: geocode + SACHET check only |
 | `GET` | `/health` | provider, alert config, `llm {configured, provider, model}` (never the key) |
+
+Additive integration additions (all safe-by-default): `weather.hourly[]` (next-24h forecast
+steps), `POST /api/overview`, `GET /api/climate` (research/repro authority), and the advisory
+`activity` parameter (sector framing only — risk, thresholds and R1/R2 alert precedence are
+unchanged). Coordinates (`latitude`/`longitude` or a `lat,lon` `location_hint`) bypass geocoding
+only when the message names no place.
 
 Response statuses: `grounded` (evidence exists → the LLM may phrase it, if it verifies) ·
 `clarify` (ambiguous or missing location) · `abstain` (no verifiable evidence) · `error` (internal

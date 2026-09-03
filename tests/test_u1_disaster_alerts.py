@@ -48,7 +48,11 @@ from backend.services import quality as Q
 from backend.services import validation as V
 
 REFS = pathlib.Path(__file__).resolve().parent.parent / "refs"
-FRONTEND = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "index.html"
+# U1 render contract now covers the REFERENCE single-file page (frontend-old/). The production
+# UI is the React/Vite app in frontend/, which has its own quality gate (React build + mapper
+# tests over the same 8 backend payload fixtures — see scripts/check_frontend.mjs). The U1
+# alert-UX invariants asserted here stay enforced against the reference/fallback page.
+FRONTEND = pathlib.Path(__file__).resolve().parent.parent / "frontend-old" / "index.html"
 
 UTC = dt.timezone.utc
 NOW = dt.datetime(2026, 9, 1, 2, 30, tzinfo=UTC)

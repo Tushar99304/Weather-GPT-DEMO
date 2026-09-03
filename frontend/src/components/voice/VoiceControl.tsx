@@ -26,20 +26,22 @@ export const VoiceControl: React.FC = () => {
     try {
       const res = await askWeatherGPT(
         capturedTranscript,
-        currentLocation.name,
-        selectedLang,
-        preferences.demoMode
+        `${currentLocation.name}, ${currentLocation.state}`,
+        selectedLang === 'hinglish' ? 'en' : selectedLang,
+        preferences.demoMode,
       );
       setLastResponse({
         text: res.message,
         evidence: res.evidence,
       });
 
-      // Automatically speak out the response
-      const langCode = selectedLang === 'hi' || selectedLang === 'hinglish' ? 'hi-IN' : 'en-IN';
+      // Automatically speak out the grounded response
+      const langCode = selectedLang === 'hi' || selectedLang === 'hinglish' ? 'hi-IN' : selectedLang === 'mr' ? 'mr-IN' : 'en-IN';
       speakText(res.message, langCode);
     } catch {
-      setLastResponse({ text: 'Sorry, I could not process your voice request.' });
+      setLastResponse({
+        text: 'Sorry — the WeatherGPT backend could not be reached, so I will not invent an answer. Please try again shortly.',
+      });
     } finally {
       setIsProcessingResponse(false);
     }
@@ -61,7 +63,7 @@ export const VoiceControl: React.FC = () => {
       case 'listening':
         return 'Listening to your question...';
       case 'processing':
-        return 'Analyzing intent & querying IMD evidence...';
+        return 'Retrieving & validating weather evidence...';
       case 'speaking':
         return 'WeatherGPT is speaking response...';
       case 'error':

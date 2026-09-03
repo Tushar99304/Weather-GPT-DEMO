@@ -29,9 +29,9 @@ export const ChatWindow: React.FC = () => {
     try {
       const res = await askWeatherGPT(
         userQuery,
-        currentLocation.name,
+        `${currentLocation.name}, ${currentLocation.state}`,
         preferences.language,
-        preferences.demoMode
+        preferences.demoMode,
       );
 
       addMessage({
@@ -40,11 +40,17 @@ export const ChatWindow: React.FC = () => {
         queryAnalysis: res.queryAnalysis,
         evidence: res.evidence,
         activeAlert: res.activeAlert,
+        alerts: res.alerts,
+        advisory: res.view?.advisory,
+        status: res.view?.status,
+        abstainReason: res.view?.abstainReason,
+        clarification: res.view?.clarification,
+        isSample: res.isSample,
       });
     } catch {
       addMessage({
         sender: 'assistant',
-        text: 'Sorry, I encountered an issue retrieving verified weather data. Please try again.',
+        text: 'Sorry — the WeatherGPT backend could not be reached and no cached answer is available. Please check your connection and try again.',
       });
     } finally {
       setIsLoading(false);
@@ -84,7 +90,7 @@ export const ChatWindow: React.FC = () => {
           <div className="flex justify-start my-3">
             <div className="bg-[#E8F5EE] border border-[#6BAF92]/30 p-3.5 rounded-2xl rounded-tl-xs text-xs text-[#2E7D5B] flex items-center gap-2">
               <Sparkles className="w-4 h-4 animate-spin" />
-              <span>Checking trusted weather sources & validating IMD evidence...</span>
+              <span>Retrieving weather evidence, checking official alerts & validating…</span>
             </div>
           </div>
         )}

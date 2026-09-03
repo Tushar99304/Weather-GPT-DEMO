@@ -77,6 +77,87 @@ HAZARD_CODES: Dict[int, Tuple[str, bool]] = {
 }
 SEVERITY_RAISING = {"Severe", "Extreme"}
 
+# ADDITIVE (integration build): sector context for the advisory page's activity tabs.
+# These change ONLY which part of the SAME validated evidence the advisory emphasises and the
+# activity label recorded on the Advisory. They do NOT add thresholds, do NOT raise or lower
+# risk_level, and do NOT touch alert precedence (R1/R2 still decide first). The headline keeps
+# the fixed "Weather-related travel risk is X ..." product wording; the sector framing lives in
+# `activity` and one appended factor so the deterministic rule ids (rules_fired) stay identical
+# for the same Evidence regardless of sector — that is what keeps the engine auditable.
+ACTIVITY_CONTEXTS: Dict[str, Dict[str, str]] = {
+    "driving": {
+        "label": "driving/road travel",
+        "note": "For road travel: standing water, reduced visibility and gusty crosswinds matter "
+                "most; delay the journey or take a rail/alternate route when an official alert applies.",
+    },
+    "travel": {
+        "label": "public transit & rail travel",
+        "note": "For rail/transit travel: services can be suspended during severe weather and official "
+                "alerts; check operator status and allow extra time rather than relying on timetables.",
+    },
+    "outdoor event": {
+        "label": "outdoor events",
+        "note": "For outdoor events: rain, lightning and wind make open venues unsafe; have a sheltered "
+                "contingency and follow any official instruction to postpone or evacuate.",
+    },
+    "trekking": {
+        "label": "trekking & hills",
+        "note": "For trekking/hill activity: flash floods, landslides and stream crossings are the "
+                "decisive hazards; do not start a trek while an official alert is active.",
+    },
+    "agriculture": {
+        "label": "agriculture",
+        "note": "For agriculture: heavy rain, waterlogging and wind affect standing crops, spraying "
+                "windows and harvest timing; this is a weather-risk note, not agricultural advice.",
+    },
+    "marine": {
+        "label": "marine & fishing",
+        "note": "For marine/fishing activity: rough seas, squally winds and official coastal warnings "
+                "are decisive; do not venture into the sea when an official alert applies.",
+    },
+    "daily activity": {
+        "label": "daily outings",
+        "note": "For routine outings: carry rain protection and allow extra time; an official alert "
+                "still outranks this routine-weather framing.",
+    },
+}
+
+# Free-text/legacy inputs the UI's older generic tabs may send.
+_ACTIVITY_ALIASES: Dict[str, str] = {
+    "expressway driving": "driving",
+    "public transit & rail": "travel",
+    "public transit": "travel",
+    "outdoor events": "outdoor event",
+    "hills & trekking": "trekking",
+    "trekking": "trekking",
+    "agro advisory": "agriculture",
+    "marine & fishing": "marine",
+    "fishing": "marine",
+    "daily outings": "daily activity",
+    "daily": "daily activity",
+    "drive": "driving",
+    "road": "driving",
+}
+
+
+def normalize_activity(activity: Optional[str]) -> Optional[str]:
+    """Map a UI activity label to a known ACTIVITY_CONTEXTS key. Returns None for unknown/blank
+    input so the advisory keeps its default generic activity (no sector factor invented)."""
+    if not activity:
+        return None
+    key = activity.strip().lower()
+    key = _ACTIVITY_ALIASES.get(key, key)
+    return key if key in ACTIVITY_CONTEXTS else None
+
+
+def _activity_note(activity: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """Return (label, note) for a normalized activity, or (None, None)."""
+    key = normalize_activity(activity)
+    if key is None:
+        return None, None
+    ctx = ACTIVITY_CONTEXTS[key]
+    return ctx["label"], ctx["note"]
+
 
 def _day_for(bundle: WeatherBundle, timeframe: str, target_date: Optional[str]) -> Optional[ForecastDay]:
     # Same selector validation.answered_day() uses for the day_* completeness checks, so the
@@ -128,14 +209,30 @@ def _level_rank(level: str) -> int:
     return {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "UNCERTAIN": 1}[level]
 
 
-def advise(ev: Evidence) -> Advisory:
+def advise(ev: Evidence, activity: Optional[str] = None) -> Advisory:
     """Deterministic: same Evidence -> same Advisory. That is the whole point — the decision is
-    auditable and testable, and the LLM cannot change it by phrasing."""
+    auditable and testable, and the LLM cannot change it by phrasing.
+
+    ADDITIVE `activity` parameter (integration build): when the UI asks about a specific sector
+    ("marine", "agriculture", ...), the sector label is recorded on `activity` and ONE framing
+    factor is appended. Risk level, thresholds, alert precedence (R1/R2 first) and every rule id
+    are computed exactly as before — the sector never upgrades or downgrades the risk."""
     factors: List[str] = []
     rules: List[str] = []
     alert_ids: List[str] = []
     v = ev.validation
-    activity = "travel" if str(ev.request.get("intent")) == "advisory_risk" else "outdoor activity/travel"
+    sector_label, sector_note = _activity_note(activity)
+    if sector_label:
+        default_activity = sector_label
+    else:
+        default_activity = "travel" if str(ev.request.get("intent")) == "advisory_risk" else "outdoor activity/travel"
+    activity = default_activity
+
+    def add_sector_note() -> None:
+        # Appended AFTER every evidence-derived factor so the evidence order is unchanged and a
+        # reviewer still sees the deciding evidence first. Never added for unknown activity.
+        if sector_note:
+            factors.append(f"activity context ({activity}): {sector_note}")
 
     # Everything in ev.alerts.items was already tied to this location by the Phase-2 ladder, so
     # "verified" is the right word: we never carry an alert we could not attach.
@@ -185,6 +282,7 @@ def advise(ev: Evidence) -> Advisory:
         rules.append("R1_active_severe_official_alert" if raise_high else "R2_active_official_alert")
         if any_hazard:
             factors.extend(f"weather: {h[0]} — {h[2]}" for h in hazards)
+        add_sector_note()
         basis = f"the active official {top.severity or 'unclassified'} {top.event or 'alert'} for this area"
         reason = (
             f"NDMA SACHET publishes an active {top.severity or 'unclassified'} {top.event or 'alert'} that our "
@@ -199,6 +297,10 @@ def advise(ev: Evidence) -> Advisory:
     if any_hazard:
         factors.extend(f"weather: {h[0]} — {h[2]}" for h in hazards)
         rules.append("R3_weather_hazard_strong" if strong_hazard else "R3_weather_hazard")
+
+    # Every remaining rule path below runs after the weather evidence is on the factor list, so
+    # the additive sector framing can be attached once here (R1/R2 attached it explicitly above).
+    add_sector_note()
 
     # ---- R4: alerts exist but relevance could not be established ------------------------------- #
     uncertain_alerts = ev.alerts.rejected_uncertain

@@ -10,7 +10,7 @@ export const MOCK_ADVISORIES: Record<ActivityCategory, WeatherAdvisory> = {
     detailedReasons: [
       'Visibility reduced to under 3km in Lonavala ghat area.',
       'Slippery road conditions during sudden downpours.',
-      'Official IMD Yellow Warning active for Mumbai & Pune districts.',
+      'SAMPLE demo warning (not a real official alert) for Mumbai & Pune.',
     ],
     recommendation: 'Weather-related driving risk is moderate. Check the latest official warning before travelling and maintain safe vehicle distance in ghat sections.',
     officialWarningActive: true,
@@ -36,7 +36,7 @@ export const MOCK_ADVISORIES: Record<ActivityCategory, WeatherAdvisory> = {
     riskLevel: 'HIGH',
     primaryRiskReason: 'High probability (75%) of heavy precipitation and gusty winds',
     detailedReasons: [
-      'Gusty winds up to 45 km/h predicted by IMD.',
+      'SAMPLE demo: gusty winds up to 45 km/h.',
       'Water stagnation risk in open non-paved ground areas.',
       'High thunderstorm activity index between 2 PM and 6 PM IST.',
     ],
@@ -79,7 +79,7 @@ export const MOCK_ADVISORIES: Record<ActivityCategory, WeatherAdvisory> = {
     primaryRiskReason: 'Squally weather with wind speed reaching 45-55 kmph',
     detailedReasons: [
       'Sea conditions will be rough to very rough.',
-      'IMD coastal advisory issued for small crafts and trawlers.',
+      'SAMPLE demo coastal advisory (not a real official bulletin).',
       'Swell waves up to 3.5m expected.',
     ],
     recommendation: 'Fishermen are strongly advised not to venture into deep sea along and off Maharashtra coast.',

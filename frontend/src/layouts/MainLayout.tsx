@@ -10,8 +10,15 @@ import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { CheckCircle } from 'lucide-react';
 
 export const MainLayout: React.FC = () => {
-  const { activeAlertModal, setActiveAlertModal } = useWeatherStore();
+  const { activeAlertModal, setActiveAlertModal, syncData, checkHealth } = useWeatherStore();
   const { justRestored } = useNetworkStatus();
+
+  React.useEffect(() => {
+    void checkHealth();
+    void syncData();
+    // Bootstrapped once on mount; subsequent refreshes come from location changes/health polls.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="min-h-screen bg-[#F7FBF8] text-[#17352A] flex flex-col antialiased selection:bg-[#E8F5EE] selection:text-[#2E7D5B]">
@@ -23,7 +30,7 @@ export const MainLayout: React.FC = () => {
         <div className="bg-emerald-600 text-white px-4 py-2 flex items-center justify-between text-xs font-semibold shadow-md animate-in slide-in-from-top duration-300">
           <div className="flex items-center gap-2">
             <CheckCircle className="w-4 h-4" />
-            <span>Connection restored! Weather evidence successfully synchronized with IMD servers.</span>
+            <span>Connection restored — re-syncing grounded weather evidence from the backend.</span>
           </div>
         </div>
       )}

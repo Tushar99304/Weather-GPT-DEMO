@@ -8,7 +8,7 @@ import { useWeatherStore } from '../../store/useWeatherStore';
 
 export const Header: React.FC = () => {
   const { alerts, setActiveAlertModal } = useWeatherStore();
-  const warningCount = alerts.filter((a) => a.severity === 'WARNING' || a.severity === 'ALERT').length;
+  const warningCount = alerts.length;
 
   return (
     <header className="h-16 bg-white border-b border-[#DCEAE2] px-4 lg:px-6 flex items-center justify-between sticky top-0 z-30 shadow-xs">

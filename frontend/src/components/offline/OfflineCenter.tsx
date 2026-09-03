@@ -72,7 +72,7 @@ export const OfflineCenter: React.FC = () => {
             <p className="text-xs text-[#6B7D74]">
               {connection.isOnline
                 ? 'Online Mode — Cached copies saved automatically for offline access.'
-                : `Offline Mode Active — Last synchronized at ${connection.lastSyncedAt || '10:42 AM IST'}`}
+                : `Offline Mode Active — last synchronized ${connection.lastSyncedAt ? 'at ' + connection.lastSyncedAt : 'time unknown'}`}
             </p>
           </div>
         </div>
@@ -105,15 +105,20 @@ export const OfflineCenter: React.FC = () => {
             <div className="bg-[#F7FBF8] p-3 rounded-xl border border-[#DCEAE2]">
               <span className="text-[#6B7D74]">Temperature</span>
               <div className="font-bold text-[#17352A] mt-0.5">
-                {formatTemp(currentWeather.temperature, preferences.tempUnit)}
+                {currentWeather.temperature != null
+                  ? formatTemp(currentWeather.temperature, preferences.tempUnit)
+                  : '—'}
               </div>
             </div>
             <div className="bg-[#F7FBF8] p-3 rounded-xl border border-[#DCEAE2]">
               <span className="text-[#6B7D74]">Precipitation</span>
-              <div className="font-bold text-[#17352A] mt-0.5">{currentWeather.rainfall} mm ({currentWeather.rainProbability}%)</div>
+              <div className="font-bold text-[#17352A] mt-0.5">
+                {currentWeather.rainfall != null ? `${currentWeather.rainfall} mm` : '—'}
+                {currentWeather.rainProbability != null ? ` (${currentWeather.rainProbability}%)` : ''}
+              </div>
             </div>
             <div className="bg-[#F7FBF8] p-3 rounded-xl border border-[#DCEAE2]">
-              <span className="text-[#6B7D74]">Source Priority</span>
+              <span className="text-[#6B7D74]">Source</span>
               <div className="font-bold text-[#2E7D5B] mt-0.5">{currentWeather.source}</div>
             </div>
           </div>
@@ -121,7 +126,10 @@ export const OfflineCenter: React.FC = () => {
           {!connection.isOnline && (
             <div className="bg-amber-50 text-amber-900 border border-amber-200 p-3 rounded-xl text-xs flex items-center gap-2 font-medium">
               <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0" />
-              <span>Live weather updates are unavailable. Showing cached IMD observations.</span>
+              <span>
+                Live updates are unavailable. Showing the last cached grounded evidence — not fresh
+                observations and not official IMD data. Follow current official advisories directly.
+              </span>
             </div>
           )}
         </div>

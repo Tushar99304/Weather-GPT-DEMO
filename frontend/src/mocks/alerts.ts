@@ -3,14 +3,14 @@ import type { WeatherAlert } from '../types';
 export const MOCK_ALERTS: WeatherAlert[] = [
   {
     id: 'alert-mum-01',
-    title: 'Heavy to Very Heavy Rainfall Warning (IMD Yellow Alert)',
+    title: 'SAMPLE: Heavy Rainfall Warning (demo data)',
     severity: 'WARNING',
     affectedArea: 'Mumbai City, Mumbai Suburban, Thane & Palghar',
     locationId: 'mumbai',
     issueTime: 'Today 08:30 AM IST',
     expiryTime: 'Tomorrow 08:30 AM IST',
-    source: 'IMD',
-    officialMessage: 'IMD Mumbai Bulletin: Heavy to very heavy rainfall very likely to occur at isolated places in districts of Mumbai and Thane. Gusty winds reaching 45-55 kmph likely along the coast.',
+    source: 'SAMPLE DATA',
+    officialMessage: 'SAMPLE bulletin (not a real alert): heavy rainfall very likely to occur at isolated places in districts of Mumbai and Thane. Gusty winds reaching 45-55 kmph likely along the coast.',
     weatherEvidenceSummary: 'Expected rainfall: 64.5mm to 115.5mm in 24 hours. High tide of 4.2m expected at 01:45 PM IST.',
     recommendedActions: [
       'Avoid visiting waterlogged low-lying areas (Hindmata, Sion, Kurla).',
@@ -29,7 +29,7 @@ export const MOCK_ALERTS: WeatherAlert[] = [
     locationId: 'manali',
     issueTime: 'Today 06:00 AM IST',
     expiryTime: 'Today 11:59 PM IST',
-    source: 'NDMA SACHET',
+    source: 'SAMPLE DATA',
     officialMessage: 'SACHET Disaster Alert: Flash flood threat in Beas river basin due to intense precipitation upstream near Rohtang Pass.',
     weatherEvidenceSummary: 'Cumulative 12-hour precipitation: 85mm. River Beas discharge elevated by 1.8m above danger mark.',
     recommendedActions: [
@@ -48,8 +48,8 @@ export const MOCK_ALERTS: WeatherAlert[] = [
     locationId: 'delhi',
     issueTime: 'Today 10:00 AM IST',
     expiryTime: 'Today 06:00 PM IST',
-    source: 'IMD',
-    officialMessage: 'IMD New Delhi: Maximum temperature expected to hover around 39°C with high UV index of 8.0.',
+    source: 'SAMPLE DATA',
+    officialMessage: 'SAMPLE demo message: maximum temperature expected to hover around 39°C with high UV index of 8.0.',
     weatherEvidenceSummary: 'Relative humidity 42%, direct solar irradiance peak between 12:00 PM and 03:30 PM IST.',
     recommendedActions: [
       'Stay hydrated and avoid direct sun exposure during afternoon hours.',

@@ -26,15 +26,25 @@ import datetime as dt
 import pathlib
 from typing import Any, Dict
 
+import re
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend import config
-from backend.models import Evidence, GeocodeResult, ParsedQuery, QueryRequest, QueryResponse
+from backend.models import (
+    Evidence,
+    GeocodeResult,
+    ParsedQuery,
+    QueryRequest,
+    QueryResponse,
+    ResolvedLocation,
+)
 from backend.services import alerts as alerts_service
 from backend.services import advisory as advisory_service
+from backend.services import climate as climate_service
 from backend.services import evidence as evidence_service
 from backend.services import geocoding, parsing, weather
 from backend.services import llm as llm_service
@@ -54,23 +64,38 @@ app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
 )
 
+# The React frontend lives in frontend/ and builds to frontend/dist/ (vite build). In production
+# FastAPI serves the BUILT app from dist: API routes are declared first, then a SPA catch-all
+# returns index.html for client routes and StaticFiles serves the hashed assets. During frontend
+# development (npm run dev on :5173) Vite proxies /api and /health here, so nothing is served here.
 FRONTEND_DIR = pathlib.Path(__file__).resolve().parent.parent / "frontend"
-if FRONTEND_DIR.is_dir():
-    app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
+FRONTEND_DIST = FRONTEND_DIR / "dist"
+
+
+def _has_built_app() -> bool:
+    return (FRONTEND_DIST / "index.html").is_file()
+
+
+if _has_built_app():
+    app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIST / "assets")), name="assets")
 
 
 @app.get("/", include_in_schema=False)
 async def index():
-    """Serves the chat UI once Phase 4b adds it; harmless placeholder before that."""
-    target = FRONTEND_DIR / "index.html"
+    """Serves the built React app when frontend/dist exists; otherwise a JSON service banner."""
+    target = FRONTEND_DIST / "index.html"
     if target.is_file():
         return FileResponse(str(target))
     return {
-        "service": f"WeatherGPT MVP ({APP_VERSION}) - retrieval only, no LLM answer text yet",
+        "service": f"WeatherGPT MVP ({APP_VERSION}) - grounded weather intelligence API",
+        "frontend": "not built yet — run `npm install && npm run build` in frontend/ (or `npm run dev` and use the Vite proxy)",
         "read_this_first": "GET /api/pipeline?message=What is the weather in Nagpur right now?",
         "endpoints": {
             "POST /api/query": "natural-language question -> status + Evidence (weather + SACHET alerts)",
             "GET /api/pipeline": "same, as a GET, with the stage-by-stage trace (easiest in a browser)",
+            "GET /api/overview": "read-only current-conditions summary for the dashboard map",
+            "GET /api/climate": "multi-year trends from the Open-Meteo ARCHIVE (research/repro, not IMD)",
+            "POST /api/advisory": "sector-specific deterministic advisory for a place/activity",
             "GET /api/alerts": "alerts only: ?place=Mayurbhanj&context=Odisha",
             "GET /api/geocode": "place resolution + ambiguity handling",
             "GET /api/weather": "raw provider block for given coordinates",
@@ -78,6 +103,9 @@ async def index():
             "GET /docs": "OpenAPI (Swagger) UI",
         },
     }
+
+
+
 
 
 @app.get("/health")
@@ -118,7 +146,31 @@ async def health() -> Dict[str, Any]:
     }
 
 
-async def run_pipeline(message: str, location_hint: str | None = None) -> tuple[Evidence, Dict[str, Any]]:
+_COORDS_HINT = re.compile(
+    r"^\s*(?P<lat>-?\d{1,3}(?:\.\d+)?)\s*[,\s]\s*(?P<lon>-?\d{1,3}(?:\.\d+)?)\s*$"
+)
+
+
+def _coords_from_hint(location_hint: str | None) -> tuple[float, float] | None:
+    """A browser geolocation fix is passed as 'lat,lon' (or 'lat lon'). Used ONLY when the
+    message names no place; a place the user typed always wins over coordinates."""
+    if not location_hint:
+        return None
+    m = _COORDS_HINT.match(location_hint)
+    if not m:
+        return None
+    lat, lon = float(m.group("lat")), float(m.group("lon"))
+    if -90 <= lat <= 90 and -180 <= lon <= 180:
+        return lat, lon
+    return None
+
+
+async def run_pipeline(
+    message: str,
+    location_hint: str | None = None,
+    activity: str | None = None,
+    coordinates: tuple[float, float] | None = None,
+) -> tuple[Evidence, Dict[str, Any]]:
     """Shared by /api/query and the phase-1 test script, so tests exercise the real path."""
     trace: Dict[str, Any] = {"stages": []}
 
@@ -139,18 +191,36 @@ async def run_pipeline(message: str, location_hint: str | None = None) -> tuple[
         },
     )
 
-    geo: GeocodeResult = await geocoding.resolve(parsed.location_text, context=location_hint)
-    stage(
-        "geocode",
-        geo.status,
-        {
-            "query": geo.query,
-            "location": geo.location.model_dump() if geo.location else None,
-            "candidates": [c.model_dump() for c in geo.candidates],
-            "clarification": geo.clarification,
-            "gap": geo.evidence_gap,
-        },
-    )
+    # ADDITIVE: browser geolocation coordinates are honoured only when the message names no
+    # place. A typed place always goes through the normal geocoder (no coordinates spoofing).
+    coords = _coords_from_hint(location_hint) or coordinates
+    if coords is not None and not parsed.location_text:
+        geo = GeocodeResult(
+            status="ok",
+            query="device location",
+            location=ResolvedLocation(
+                name="Your current location",
+                latitude=coords[0],
+                longitude=coords[1],
+                resolution_note="resolved from browser geolocation coordinates (no place name in the query)",
+            ),
+            clarification=None,
+        )
+        stage("geocode", "ok", {"query": "device location", "location": geo.location.model_dump(),
+                                "candidates": [], "clarification": None, "gap": None})
+    else:
+        geo = await geocoding.resolve(parsed.location_text, context=location_hint)
+        stage(
+            "geocode",
+            geo.status,
+            {
+                "query": geo.query,
+                "location": geo.location.model_dump() if geo.location else None,
+                "candidates": [c.model_dump() for c in geo.candidates],
+                "clarification": geo.clarification,
+                "gap": geo.evidence_gap,
+            },
+        )
 
     # ---- short-circuit: clarify / unresolved, with NO weather retrieved ---- #
     if geo.status == "ambiguous":
@@ -340,7 +410,7 @@ async def run_pipeline(message: str, location_hint: str | None = None) -> tuple[
         },
     )
 
-    ev.advisory = advisory_service.advise(ev)
+    ev.advisory = advisory_service.advise(ev, activity=activity)
     ev.risk = ev.advisory.risk_level
     # Post-advise integrity gate: the advisory may only cite alerts that are actually in the
     # evidence. Same function Phase 4's grounding verifier will run on the LLM's answer.
@@ -418,7 +488,13 @@ async def run_pipeline(message: str, location_hint: str | None = None) -> tuple[
 
 @app.post("/api/query", response_model=QueryResponse)
 async def query(req: QueryRequest) -> QueryResponse:
-    ev, trace = await run_pipeline(req.message, location_hint=req.location_hint)
+    coords = (req.latitude, req.longitude) if (req.latitude is not None and req.longitude is not None) else None
+    ev, trace = await run_pipeline(
+        req.message,
+        location_hint=req.location_hint,
+        activity=req.activity,
+        coordinates=coords,
+    )
     return QueryResponse(
         status=ev.status,  # type: ignore[arg-type]
         user_message=req.message,
@@ -431,10 +507,135 @@ async def query(req: QueryRequest) -> QueryResponse:
 
 
 @app.get("/api/pipeline")
-async def pipeline_get(message: str, location_hint: str | None = None) -> Dict[str, Any]:
+async def pipeline_get(
+    message: str,
+    location_hint: str | None = None,
+    activity: str | None = None,
+    latitude: float | None = None,
+    longitude: float | None = None,
+) -> Dict[str, Any]:
     """GET twin of /api/query — convenient for curl/PowerShell during the sprint."""
-    ev, trace = await run_pipeline(message, location_hint=location_hint)
+    coords = (latitude, longitude) if (latitude is not None and longitude is not None) else None
+    ev, trace = await run_pipeline(message, location_hint=location_hint, activity=activity, coordinates=coords)
     return {"status": ev.status, "evidence": ev.model_dump(), "pipeline": trace}
+
+
+@app.post("/api/advisory")
+async def advisory_only(
+    message: str = "Is it safe to travel?",
+    location_hint: str | None = None,
+    activity: str | None = None,
+    latitude: float | None = None,
+    longitude: float | None = None,
+) -> Dict[str, Any]:
+    """ADDITIVE: run the same grounded pipeline for a sector-specific advisory. The deterministic
+    advisory engine is the only authority for risk; this is a convenience wrapper that returns
+    evidence.advisory (plus risk/quality/sources) so the advisory page never computes risk itself."""
+    coords = (latitude, longitude) if (latitude is not None and longitude is not None) else None
+    ev, _trace = await run_pipeline(
+        message,
+        location_hint=location_hint or activity,
+        activity=activity,
+        coordinates=coords,
+    )
+    return {
+        "ok": ev.status in {"grounded", "abstain", "clarify"},
+        "status": ev.status,
+        "risk": ev.risk,
+        "activity": ev.advisory.activity if ev.advisory else None,
+        "advisory": ev.advisory.model_dump() if ev.advisory else None,
+        "location": ev.location.model_dump() if ev.location else None,
+        "sources": [s.model_dump() for s in ev.sources],
+        "evidence_quality": ev.evidence_quality,
+        "abstain_reason": ev.abstain_reason,
+        "clarification": ev.clarification,
+        "alerts_state": ev.alerts.state,
+        "active_alerts": [a.model_dump() for a in ev.alerts.items],
+    }
+
+
+@app.get("/api/overview")
+async def overview() -> Dict[str, Any]:
+    """ADDITIVE: small read-only dashboard/map summary over a fixed list of major Indian cities.
+
+    Current conditions only, fetched concurrently through the SAME provider as /api/query. This is
+    NOT forecast/risk/alert logic — no risk is computed here, and no alert data is attached (alerts
+    are the evidence pipeline's job). A city whose fetch fails is reported with ok=false rather than
+    dropped or faked.
+    """
+    cities = [
+        ("Mumbai", 19.0760, 72.8777),
+        ("New Delhi", 28.6139, 77.2090),
+        ("Pune", 18.5204, 73.8567),
+        ("Bengaluru", 12.9716, 77.5946),
+        ("Manali", 32.2432, 77.1892),
+        ("Kolkata", 22.5726, 88.3639),
+        ("Chennai", 13.0827, 80.2707),
+        ("Hyderabad", 17.3850, 78.4867),
+    ]
+
+    async def one(name: str, lat: float, lon: float) -> Dict[str, Any]:
+        try:
+            bundle = await weather.get_provider().fetch(lat, lon, timeframe="now", timezone="auto")
+        except UpstreamError as exc:
+            return {"name": name, "lat": lat, "lng": lon, "ok": False, "error": f"{exc.service}: {exc.detail}"}
+        cur = bundle.current
+        return {
+            "name": name,
+            "lat": lat,
+            "lng": lon,
+            "ok": True,
+            "provider": bundle.provider,
+            "model": bundle.model,
+            "kind": bundle.kind,
+            "retrieved_at_utc": bundle.retrieved_at_utc,
+            "current": cur.model_dump() if cur else None,
+        }
+
+    results = await asyncio.gather(*(one(n, la, lo) for n, la, lo in cities))
+    ok_results = [r for r in results if r.get("ok")]
+    return {
+        "ok": True,
+        "authority": "research_repro",
+        "provider": config.WEATHER_PROVIDER,
+        "note": "Current conditions from the configured weather provider (Open-Meteo, research/reproducibility). No IMD data, no risk computation.",
+        "places": [r for r in results if r.get("ok")],
+        "failures": [r for r in results if not r.get("ok")],
+        "retrieved_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
+@app.get("/api/climate")
+async def climate(place: str = "Mumbai", context: str | None = None, years: int = 7) -> Dict[str, Any]:
+    """ADDITIVE: multi-year climate trends for a place, aggregated from the Open-Meteo HISTORICAL
+    ARCHIVE. Explicitly research_repro authority — never presented as official IMD climate data.
+    Geocodes the place first so a name is enough for the dashboard."""
+    geo = await geocoding.resolve(place, context=context)
+    if geo.status != "ok" or geo.location is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "ok": False,
+                "error": f"could not resolve a unique location for {place!r}",
+                "geocode": geo.model_dump(),
+            },
+        )
+    try:
+        payload = await climate_service.fetch_climate(
+            geo.location.latitude,
+            geo.location.longitude,
+            place_name=geo.location.name,
+            years=max(1, min(years, 20)),
+        )
+    except UpstreamError as exc:
+        return JSONResponse(
+            status_code=502,
+            content={"ok": False, "error": f"{exc.service}: {exc.detail}",
+                     "note": "climate archive could not be consulted; no trend data is shown"},
+        )
+    payload["location"] = geo.location.name
+    payload["admin1"] = geo.location.admin1
+    return payload
 
 
 # Convenience single-purpose endpoints kept for component testing / demos.
@@ -470,3 +671,24 @@ async def direct_weather(
     except UpstreamError as exc:
         return {"ok": False, "error": f"{exc.service}: {exc.detail}"}
     return {"ok": True, "weather": bundle.model_dump()}
+
+
+# --------------------------------------------------------------------------- #
+# SPA fallback — MUST be registered LAST so it can never shadow an API route.
+# Any non-API GET path (e.g. /chat, /alerts on a hard reload) returns index.html.
+# --------------------------------------------------------------------------- #
+@app.get("/{full_path:path}", include_in_schema=False)
+async def spa_fallback(full_path: str):
+    if full_path.startswith(("api/", "health", "docs", "openapi.json")):
+        return JSONResponse(status_code=404, content={"detail": "not found"})
+    if _has_built_app():
+        # Hashed assets live under /assets (mounted above); other files in dist root (favicon,
+        # icons) are served directly when present, otherwise the SPA shell handles the route.
+        candidate = FRONTEND_DIST / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(str(candidate))
+        return FileResponse(str(FRONTEND_DIST / "index.html"))
+    return JSONResponse(
+        status_code=404,
+        content={"detail": "frontend not built; see / for API info"},
+    )

@@ -121,19 +121,46 @@ To showcase the application to SIH judges without requiring an active backend se
 
 ## 🔌 FastAPI Backend Integration Contract
 
-The frontend expects a FastAPI backend server running at `VITE_API_BASE_URL` (default: `http://localhost:8000/api`).
+The app calls the existing WeatherGPT backend over **relative URLs** (`/api/...`, `/health`).
+`VITE_API_BASE_URL` defaults to blank (same origin): in development `npm run dev` proxies the
+calls to `http://localhost:8000` (`vite.config.ts`; override with `VITE_PROXY_TARGET`), and in
+production the built `dist/` is served by FastAPI itself. No secrets ever live in the frontend.
 
-### API Endpoints Expected:
-- `GET /api/weather/current?location={id}` -> Returns `WeatherEvidence`
-- `GET /api/forecast/hourly?location={id}` -> Returns `HourlyForecast[]`
-- `GET /api/forecast/daily?location={id}` -> Returns `DailyForecast[]`
-- `GET /api/alerts/active?location={id}` -> Returns `WeatherAlert[]`
-- `POST /api/chat/ask` -> Request: `{ query, location, language }` -> Returns `{ message, queryAnalysis, evidence, activeAlert }`
-- `GET /api/climate/annual` -> Returns `ClimateDataPoint[]`
+### Data flow
+All weather, alerts, risk and answers come from the grounded pipeline. `src/services/mappers.ts`
+converts the backend Evidence/Answer into the view models — it never computes risk or fabricates
+missing values. The only endpoints used:
+
+- `POST /api/query` `{ message, location_hint?, activity?, latitude?, longitude? }` → `QueryResponse`
+  (current weather, daily + **hourly** forecast, official SACHET alerts, deterministic advisory,
+  grounded `answer`, abstain/clarify states). Powers chat, dashboard, forecast and advisory.
+- `GET /api/advisory`-style sector queries use `/api/query` with an `activity` (driving/marine/…).
+- `GET /api/overview` → current conditions for the map's city markers.
+- `GET /api/climate?place=` → research/repro historical trends (**not** official IMD data).
+- `GET /health` → secret-free provider/LLM/alert configuration for the connection badge.
+
+### Data honesty
+- Current/daily/hourly weather is **Open-Meteo** labelled **research/repro** — never "IMD".
+- Only **NDMA/SACHET** alerts are `official`; they always take precedence and expired alerts are
+  shown separately for transparency.
+- Abstain / clarify / alerts-unavailable render as such; missing fields show "—" rather than
+  invented numbers. UV, visibility and radar tiles are not wired and are hidden/omitted.
+- The labelled **SAMPLE DATA** mode (default off) shows bundled demo content, clearly badged.
+
+### Quality gate
+```bash
+npm install
+npm run lint    # oxlint (0 errors)
+npm run build   # tsc -b + vite build
+npm test        # vitest: mappers over all 8 backend payload fixtures
+node ../scripts/check_frontend.mjs   # runs all of the above
+```
 
 ---
 
 ## 🛡️ License & Credits
 
 Designed & Developed for **Smart India Hackathon 2026**.
-Observation evidence attribution: **India Meteorological Department (IMD)** & **National Disaster Management Authority (NDMA SACHET)**.
+Evidence attribution: official disaster alerts come from **NDMA SACHET (CAP)**; weather data comes
+from **Open-Meteo (research/reproducibility)**. No live IMD feed is wired into this build, so
+nothing is attributed to the India Meteorological Department.

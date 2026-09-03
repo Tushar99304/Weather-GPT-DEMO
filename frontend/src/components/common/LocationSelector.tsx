@@ -5,7 +5,7 @@ import { MapPin, Search, Navigation, Check } from 'lucide-react';
 import type { Location } from '../../types';
 
 export const LocationSelector: React.FC = () => {
-  const { currentLocation, setLocation } = useWeatherStore();
+  const { currentLocation, setLocation, setGpsLocation } = useWeatherStore();
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [isLocating, setIsLocating] = useState(false);
@@ -33,10 +33,11 @@ export const LocationSelector: React.FC = () => {
     setIsLocating(true);
     try {
       const loc = await getCurrentGeoLocation();
-      setLocation(loc);
+      // Coordinates, not a name: the backend resolves the position without geocoding.
+      setGpsLocation(loc.lat, loc.lng);
       setIsOpen(false);
     } catch {
-      alert('Unable to detect GPS position. Defaulting to selected location.');
+      alert('Unable to detect GPS position. Please choose a city from the list.');
     } finally {
       setIsLocating(false);
     }

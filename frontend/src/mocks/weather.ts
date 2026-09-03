@@ -2,8 +2,9 @@ import type { WeatherEvidence } from '../types';
 
 export const MOCK_WEATHER_DATA: Record<string, WeatherEvidence> = {
   mumbai: {
-    source: 'IMD',
-    sourcePriority: 'OFFICIAL_IMD',
+    source: 'SAMPLE DATA',
+    authority: 'sample',
+    sourcePriority: 'SAMPLE',
     location: 'Mumbai, Maharashtra',
     observedAt: '10:30 AM IST',
     validFrom: '10:30 AM IST',
@@ -23,8 +24,9 @@ export const MOCK_WEATHER_DATA: Record<string, WeatherEvidence> = {
     conditionCode: 'RAIN_MODERATE',
   },
   delhi: {
-    source: 'IMD',
-    sourcePriority: 'OFFICIAL_IMD',
+    source: 'SAMPLE DATA',
+    authority: 'sample',
+    sourcePriority: 'SAMPLE',
     location: 'New Delhi, Delhi',
     observedAt: '10:30 AM IST',
     validFrom: '10:30 AM IST',
@@ -44,8 +46,9 @@ export const MOCK_WEATHER_DATA: Record<string, WeatherEvidence> = {
     conditionCode: 'CLEAR_HAZE',
   },
   pune: {
-    source: 'IMD',
-    sourcePriority: 'OFFICIAL_IMD',
+    source: 'SAMPLE DATA',
+    authority: 'sample',
+    sourcePriority: 'SAMPLE',
     location: 'Pune, Maharashtra',
     observedAt: '10:30 AM IST',
     validFrom: '10:30 AM IST',
@@ -65,8 +68,9 @@ export const MOCK_WEATHER_DATA: Record<string, WeatherEvidence> = {
     conditionCode: 'DRIZZLE',
   },
   bengaluru: {
-    source: 'IMD',
-    sourcePriority: 'OFFICIAL_IMD',
+    source: 'SAMPLE DATA',
+    authority: 'sample',
+    sourcePriority: 'SAMPLE',
     location: 'Bengaluru, Karnataka',
     observedAt: '10:30 AM IST',
     validFrom: '10:30 AM IST',
@@ -86,8 +90,9 @@ export const MOCK_WEATHER_DATA: Record<string, WeatherEvidence> = {
     conditionCode: 'CLOUDY_BREEZY',
   },
   manali: {
-    source: 'IMD',
-    sourcePriority: 'OFFICIAL_IMD',
+    source: 'SAMPLE DATA',
+    authority: 'sample',
+    sourcePriority: 'SAMPLE',
     location: 'Manali, Himachal Pradesh',
     observedAt: '10:30 AM IST',
     validFrom: '10:30 AM IST',

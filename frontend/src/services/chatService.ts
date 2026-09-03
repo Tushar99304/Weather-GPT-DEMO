@@ -1,88 +1,143 @@
-import type { WeatherEvidence, QueryAnalysis } from '../types';
-import { MOCK_WEATHER_DATA } from '../mocks/weather';
+/**
+ * chatService.ts — conversational queries. Real answers come from POST /api/query (the full
+ * grounded pipeline: parse -> geocode -> evidence -> validation -> advisory -> grounded LLM).
+ * The chat UI only displays what the backend decided; it never re-derives risk or weather.
+ *
+ * Demo mode (explicit opt-in, default off) returns bundled SAMPLE responses, clearly badged.
+ */
+import type { QueryAnalysis, WeatherAlert, WeatherEvidence } from '../types';
 import { MOCK_ALERTS } from '../mocks/alerts';
-import { fetchApi } from './api';
+import { queryBackend } from './backendClient';
+import {
+  detectLanguage,
+  mapAdvisory,
+  mapAlerts,
+  mapEvidence,
+  mapQueryAnalysis,
+} from './mappers';
+import type { QueryResultView } from '../types';
 
 export interface AskQueryResponse {
   message: string;
   queryAnalysis: QueryAnalysis;
-  evidence: WeatherEvidence;
-  activeAlert?: typeof MOCK_ALERTS[0];
+  evidence?: WeatherEvidence;
+  activeAlert?: WeatherAlert;
+  alerts?: WeatherAlert[];
+  view?: QueryResultView;
+  isSample: boolean;
 }
+
+/** SAMPLE path — used ONLY in demo mode. Kept self-contained and clearly badged. */
+function sampleResponse(userQuery: string, currentLocationName: string, language: string): AskQueryResponse {
+  const lowerQuery = userQuery.toLowerCase();
+  const evidence: WeatherEvidence = {
+    ...MOCK_WEATHER_SAMPLE,
+    location: currentLocationName,
+    source: 'SAMPLE DATA',
+    authority: 'sample',
+    sourcePriority: 'SAMPLE',
+    isSample: true,
+  };
+  const alert = MOCK_ALERTS.find((a) => a.locationId === 'mumbai');
+  const detected: QueryAnalysis['language'] =
+    language === 'hi' ? 'Hindi' : language === 'mr' ? 'Marathi' : detectLanguage(userQuery);
+  const intent: QueryAnalysis['intent'] = lowerQuery.includes('alert')
+    ? 'Alert'
+    : lowerQuery.includes('travel') || lowerQuery.includes('drive')
+    ? 'Travel'
+    : 'Current';
+  const message =
+    intent === 'Alert'
+      ? alert
+        ? `[SAMPLE] ${alert.title}: ${alert.officialMessage}`
+        : '[SAMPLE] No sample alert is attached for this location.'
+      : `[SAMPLE] Current weather in ${currentLocationName} is ${evidence.temperature}°C, ${evidence.conditionText}. This is bundled demo data, not a live source.`;
+  return {
+    message,
+    queryAnalysis: {
+      intent,
+      location: currentLocationName,
+      timeframe: 'Current',
+      language: detected,
+      dataSourcesUsed: ['SAMPLE DATA'],
+      validationStatus: 'SAMPLE_DATA',
+    },
+    evidence,
+    activeAlert: alert ? { ...alert, source: 'SAMPLE DATA', isOfficial: false, isSample: true } : undefined,
+    isSample: true,
+  };
+}
+
+const MOCK_WEATHER_SAMPLE: WeatherEvidence = {
+  source: 'SAMPLE DATA',
+  authority: 'sample',
+  sourcePriority: 'SAMPLE',
+  location: 'Mumbai',
+  observedAt: '—',
+  temperature: 30,
+  feelsLike: 33,
+  humidity: 75,
+  rainfall: 2,
+  windSpeed: 15,
+  pressure: 1008,
+  warningsCount: 0,
+  evidenceQuality: 'MEDIUM',
+  conditionText: 'Sample conditions',
+  isSample: true,
+};
 
 export async function askWeatherGPT(
   userQuery: string,
-  currentLocationName: string = 'Mumbai',
-  language: string = 'en',
-  useDemo: boolean = true
+  currentLocationName = 'Mumbai',
+  language = 'en',
+  useDemo = false,
+  activity?: string,
 ): Promise<AskQueryResponse> {
-  if (!useDemo) {
-    try {
-      const apiRes = await fetchApi<AskQueryResponse>('/chat/ask', {
-        method: 'POST',
-        body: JSON.stringify({ query: userQuery, location: currentLocationName, language }),
-      });
-      if (apiRes.success && apiRes.data) {
-        return apiRes.data;
-      }
-    } catch {
-      // Fallback
-    }
+  if (useDemo) {
+    return sampleResponse(userQuery, currentLocationName, language);
   }
 
-  const lowerQuery = userQuery.toLowerCase();
-  let locKey = 'mumbai';
-  if (lowerQuery.includes('delhi')) locKey = 'delhi';
-  else if (lowerQuery.includes('pune')) locKey = 'pune';
-  else if (lowerQuery.includes('bengaluru') || lowerQuery.includes('bangalore')) locKey = 'bengaluru';
-  else if (lowerQuery.includes('manali')) locKey = 'manali';
+  const res = await queryBackend({
+    message: userQuery,
+    // Only pass the location as a hint; the backend does its own geocoding and disambiguation.
+    locationHint: currentLocationName,
+    activity,
+  });
 
-  const weather = MOCK_WEATHER_DATA[locKey] || MOCK_WEATHER_DATA['mumbai'];
-  const alert = MOCK_ALERTS.find((a) => a.locationId === locKey);
+  const ev = res.evidence;
+  const { active } = mapAlerts(ev);
+  const evidence = mapEvidence(ev);
+  const advisory = mapAdvisory(
+    ev.advisory ?? null,
+    ev.location ? [ev.location.name, ev.location.admin1].filter(Boolean).join(', ') : currentLocationName,
+  );
 
-  let detectedLang: 'English' | 'Hindi' | 'Marathi' | 'Hinglish' = 'English';
-  if (lowerQuery.includes('kya') || lowerQuery.includes('hogi') || lowerQuery.includes('baarish') || lowerQuery.includes('kal')) {
-    detectedLang = 'Hinglish';
-  } else if (/[\u0900-\u097F]/.test(userQuery)) {
-    detectedLang = 'Hindi';
-  }
-
-  let intent: QueryAnalysis['intent'] = 'Forecast';
-  let responseText = '';
-
-  if (lowerQuery.includes('alert') || lowerQuery.includes('warning') || lowerQuery.includes('danger')) {
-    intent = 'Alert';
-    if (alert) {
-      responseText = `Official ${alert.source} Warning active for ${alert.affectedArea}: ${alert.title}. ${alert.officialMessage}`;
-    } else {
-      responseText = `No official meteorological warnings are currently active for ${weather.location}.`;
-    }
-  } else if (lowerQuery.includes('travel') || lowerQuery.includes('drive') || lowerQuery.includes('train')) {
-    intent = 'Travel';
-    responseText = `Weather-related travel risk is MODERATE for ${weather.location}. Rain probability is ${weather.rainProbability}% with gusty winds of ${weather.windSpeed} km/h. Check coastal flood status before departure.`;
-  } else if (lowerQuery.includes('rain') || lowerQuery.includes('baarish') || lowerQuery.includes('shower')) {
-    intent = 'Forecast';
-    if (detectedLang === 'Hinglish') {
-      responseText = `Haan, ${weather.location} mein rain activity predicted hai (${weather.rainProbability}% probability). ${weather.conditionText} IMD observations ke dwara ground evidence verified hai.`;
-    } else {
-      responseText = `Rain is expected in ${weather.location} with a ${weather.rainProbability}% probability. Ground rainfall volume is estimated at ${weather.rainfall} mm.`;
-    }
-  } else {
-    intent = 'Current';
-    responseText = `Current weather in ${weather.location} is ${weather.temperature}°C (Feels like ${weather.feelsLike}°C) with ${weather.conditionText}. Humidity is ${weather.humidity}%. Source: IMD (${weather.observedAt}).`;
-  }
+  const view: QueryResultView = {
+    status: res.status,
+    message:
+      res.answer?.text || ev.abstain_reason || ev.clarification || 'No grounded answer is available.',
+    evidence,
+    hourly: [],
+    daily: [],
+    alerts: active,
+    expiredAlerts: [],
+    advisory: advisory ?? undefined,
+    risk: ev.risk ?? null,
+    quality: ev.evidence_quality ?? undefined,
+    sources: [],
+    abstainReason: ev.abstain_reason ?? undefined,
+    clarification: ev.clarification ?? undefined,
+    answer: res.answer ?? undefined,
+    raw: ev,
+  };
 
   return {
-    message: responseText,
-    queryAnalysis: {
-      intent,
-      location: weather.location,
-      timeframe: 'Current / Next 24h',
-      language: detectedLang,
-      dataSourcesUsed: alert ? ['IMD', 'NDMA SACHET'] : ['IMD'],
-      validationStatus: 'VALIDATED_IMD',
-    },
-    evidence: weather,
-    activeAlert: alert,
+    message: view.message,
+    queryAnalysis: mapQueryAnalysis(ev, userQuery, res.answer),
+    evidence,
+    activeAlert: active[0],
+    alerts: active,
+    view,
+    isSample: false,
   };
 }

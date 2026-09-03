@@ -44,7 +44,8 @@ export const DashboardPage: React.FC = () => {
             How can I help with the weather today?
           </h1>
           <p className="text-xs sm:text-sm text-[#6B7D74] mt-1">
-            Grounded meteorological forecasting, IMD warning priorities, and travel risk support.
+            Grounded weather evidence from Open-Meteo with official NDMA/SACHET alert priority and
+            deterministic travel-risk support.
           </p>
         </div>
 

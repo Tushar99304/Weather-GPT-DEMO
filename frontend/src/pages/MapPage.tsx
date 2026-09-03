@@ -12,7 +12,8 @@ export const MapPage: React.FC = () => {
             Live Geospatial Weather Map
           </h1>
           <p className="text-xs text-[#6B7D74]">
-            Real-time radar layers for rainfall, temperature vectors, wind speed and IMD warning zones
+            Current conditions across major Indian cities (Open-Meteo, research/repro) and official
+            NDMA/SACHET alert locations. Radar/satellite tiles are not wired in this build.
           </p>
         </div>
       </div>

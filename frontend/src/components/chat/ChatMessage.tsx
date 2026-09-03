@@ -79,15 +79,54 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
 
         <div className="space-y-3 flex-1 min-w-0">
           {/* Main Answer Bubble */}
-          <div className="bg-white border border-[#DCEAE2] p-4 rounded-2xl rounded-tl-xs shadow-xs text-sm text-[#17352A] space-y-3">
-            {/* Active Official Warning Banner if present */}
-            {message.activeAlert && (
-              <div className="bg-red-50 border border-red-200 text-red-900 p-3 rounded-xl flex items-start gap-2 text-xs font-medium">
-                <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-                <div>
-                  <strong className="block font-bold">⚠ {message.activeAlert.title}</strong>
-                  <span>{message.activeAlert.officialMessage}</span>
+          <div
+            className={`p-4 rounded-2xl rounded-tl-xs shadow-xs text-sm space-y-3 border ${
+              message.status === 'abstain' || message.status === 'clarify'
+                ? 'bg-amber-50/60 border-amber-200 text-[#17352A]'
+                : 'bg-white border-[#DCEAE2] text-[#17352A]'
+            }`}
+          >
+            {message.isSample && (
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                <AlertTriangle className="w-3.5 h-3.5" /> SAMPLE DEMO DATA — not a live source
+              </div>
+            )}
+
+            {/* Official alerts take precedence and are surfaced first. */}
+            {(message.alerts && message.alerts.length > 0) || message.activeAlert ? (
+              <div className="space-y-2">
+                <div className="bg-red-50 border border-red-300 text-red-900 p-3 rounded-xl flex items-start gap-2 text-xs font-medium">
+                  <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="block font-bold text-red-700">
+                      OFFICIAL NDMA / SACHET ALERT ACTIVE — outranks model weather
+                    </strong>
+                    {(message.alerts && message.alerts.length > 0
+                      ? message.alerts
+                      : [message.activeAlert]
+                    )
+                      .filter(Boolean)
+                      .map((alert, i) => (
+                        <span key={i} className="block mt-1">
+                          <strong>{alert!.title}</strong> — {alert!.officialMessage}
+                          {alert!.instruction && (
+                            <span className="block mt-1 italic">
+                              Official instruction: “{alert!.instruction}”
+                            </span>
+                          )}
+                        </span>
+                      ))}
+                  </div>
                 </div>
+              </div>
+            ) : null}
+
+            {(message.status === 'abstain' || message.status === 'clarify') && (
+              <div className="flex items-center gap-2 text-amber-800 text-xs font-bold">
+                <AlertTriangle className="w-4 h-4" />
+                {message.status === 'abstain'
+                  ? 'WeatherGPT abstained rather than guess:'
+                  : 'Clarification needed:'}
               </div>
             )}
 
@@ -133,10 +172,14 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
             </div>
           </div>
 
-          {/* Structured Weather Evidence beneath answer */}
-          {message.evidence && <EvidencePanel evidence={message.evidence} compact />}
+          {/* Structured Weather Evidence beneath answer (only when grounded evidence exists) */}
+          {message.evidence && message.evidence.temperature != null && (
+            <EvidencePanel evidence={message.evidence} compact />
+          )}
 
-          {/* Optional Technical Routing breakdown for SIH Judge evaluation */}
+          {/* Why-this-answer drawer requires grounded evidence too. */}
+
+          {/* Technical routing / grounding breakdown */}
           {message.queryAnalysis && <QueryRoutingBreakdown analysis={message.queryAnalysis} />}
         </div>
       </div>
