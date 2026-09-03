@@ -10,7 +10,9 @@ export const VoiceControl: React.FC = () => {
   const [lastResponse, setLastResponse] = useState<{ text: string; evidence?: any } | null>(null);
   const [isProcessingResponse, setIsProcessingResponse] = useState(false);
 
-  const { currentLocation, preferences } = useWeatherStore();
+  // sessionId is the SHARED conversation id: Voice uses the exact same session as Chat, so a
+  // follow-up spoken after a chat turn ("Is it going to rain?") reuses the established place.
+  const { currentLocation, preferences, sessionId } = useWeatherStore();
 
   const {
     voiceState,
@@ -29,6 +31,9 @@ export const VoiceControl: React.FC = () => {
         `${currentLocation.name}, ${currentLocation.state}`,
         selectedLang === 'hinglish' ? 'en' : selectedLang,
         preferences.demoMode,
+        undefined,
+        // U3: the SAME shared session as Chat — never a per-request id.
+        sessionId,
       );
       setLastResponse({
         text: res.message,

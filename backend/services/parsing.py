@@ -95,7 +95,10 @@ LOCATION_PATTERNS = [
     # a tight, specific match wins over a loose "to <verb>" capture ("safe to travel in Mumbai").
     re.compile(r"\b(?:what|how)\s+about\s+([a-z\u0900-\u097F][a-z0-9\u0900-\u097F'.,\s-]{1,50}?)\s*(?:[?.!]|$)",
                re.I),
-    re.compile(r"\b([a-z][a-z0-9.'\s-]{1,40}?)\s+(?:mein|mei|men|mai|madhe|madhye|me|ka|ki|ke|chya|cha|che)\b",
+    # Hinglish "<place> mein/mei/ka/...". Capture the SINGLE word immediately before the
+    # postposition (the place token), regardless of word order, so "baarish hogi mumbai mei",
+    # "mumbai mein", "kya ... mumbai mei?" all extract "mumbai" — not the preceding verbs.
+    re.compile(r"\b([a-z][a-z0-9.'-]{0,39})\s+(?:mein|mei|men|mai|madhe|madhye|me|ka|ki|ke|chya|cha|che)\b",
                re.I),
     re.compile(r"([\u0900-\u097F]{2,20}?)(?:त|मध्ये|चे|चा|च्या|ला|मधले|मधला)(?![\u0900-\u097F])"),
     re.compile(r"([\u0900-\u097F]{2,20})\s+में(?![\u0900-\u097F])"),
@@ -281,6 +284,41 @@ def classify_intent(
     return "clarification_needed", "no weather signal found in the message"
 
 
+def classify_topic(text: str, intent: str = "") -> str:
+    """U3: fine-grained practical topic for the conversational layer / UI. Pure query
+    understanding — it NEVER produces weather values or risk; those come from the pipeline.
+    Returns one of QueryTopic."""
+    t = text.lower()
+    # order matters: practical/rain specifics before the generic weather bucket
+    if re.search(r"\bumb?rella\b|\brain[\s-]?coat\b|\bgaloshes?\b", t) \
+            or re.search(r"छाता|छत्री|रेनकोट", text):
+        return "umbrella_advice"
+    if re.search(r"\balert|warning|watch\b", t) or ALERT_MULTILINGUAL_RE.search(text):
+        return "official_alert"
+    if re.search(r"\bhistor|climate|average|normal|yesterday|last year|previous\b", t):
+        return "historical_climate"
+    if re.search(r"\b(?:safe|should i go|can i go|travel|commute|drive|trip|flight|train|go out)\b", t) \
+            or SAFETY_MULTILINGUAL_RE.search(text):
+        return "travel_safety"
+    if re.search(r"\b(?:picnic|outdoor|outing|marathon|sports?|game|cycl|hike|trek|beach|park|play)\b", t):
+        return "outdoor_suitability"
+    if re.search(r"\b(?:rain|rainfall|shower|drizzl|precip|storm|thunder|wet)\b", t) \
+            or RAIN_MULTILINGUAL_RE.search(text):
+        return "rain_prediction"
+    if re.search(r"\b(?:temperature|hot|cold|warm|chilly|heat|degree|°c?\b|freezing|humid)\b", t) \
+            or re.search(r"तापमान|गर्मी|ठंड", text):
+        return "temperature"
+    if intent == "official_alert":
+        return "official_alert"
+    if intent == "historical_climate":
+        return "historical_climate"
+    if intent == "advisory_risk":
+        return "travel_safety"
+    if re.search(r"\b(weather|forecast|condition|mausam|मौसम|हवामान)\b", t) or WEATHER_MULTILINGUAL_RE.search(text):
+        return "weather_summary"
+    return "other"
+
+
 def parse(text: str, today: Optional[dt.date] = None) -> ParsedQuery:
     text = (text or "").strip()
     timeframe, tf_reason, target_date = extract_timeframe(text, today=today)
@@ -292,10 +330,15 @@ def parse(text: str, today: Optional[dt.date] = None) -> ParsedQuery:
         if intent != "advisory_risk":
             intent = "clarification_needed"
             intent_reason = "location missing"
+    # Fine-grained conversational topic (query understanding only; not a risk input). Computed
+    # from the raw message so it survives the location-missing intent override above; the
+    # context resolver carries the topic across follow-ups.
+    topic = classify_topic(text, intent=intent if intent != "clarification_needed" else "")
     return ParsedQuery(
         message=text,
         intent=intent,  # type: ignore[arg-type]
         intent_reason=intent_reason,
+        topic=topic,  # type: ignore[arg-type]
         location_text=location,
         timeframe=timeframe,  # type: ignore[arg-type]
         timeframe_reason=tf_reason,

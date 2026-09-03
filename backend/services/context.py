@@ -86,6 +86,7 @@ class ConversationContext:
     timeframe: Optional[str] = None          # ParsedQuery.timeframe value
     target_date: Optional[str] = None        # YYYY-MM-DD when pinned
     intent: Optional[str] = None             # ParsedQuery.intent value
+    topic: Optional[str] = None              # ParsedQuery.topic value (fine-grained)
     activity: Optional[str] = None           # advisory sector (driving/marine/...)
     language: Optional[str] = None           # detected UI/conversation language hint
     turn_count: int = 0
@@ -148,10 +149,11 @@ class ConversationStore:
         timeframe: Optional[str] = None,
         target_date: Optional[str] = None,
         intent: Optional[str] = None,
+        topic: Optional[str] = None,
         activity: Optional[str] = None,
         language: Optional[str] = None,
     ) -> ConversationContext:
-        """Record what THIS turn resolved to. Only non-None values overwrite memory."""
+        """Record what THIS turn resolved to. Only non-None/non-'other' values overwrite memory."""
         with self._lock:
             ctx = self._sessions.get(session_id) or ConversationContext()
             if location_text is not None:
@@ -166,6 +168,8 @@ class ConversationStore:
                 ctx.target_date = target_date
             if intent is not None:
                 ctx.intent = intent
+            if topic is not None and topic != "other":
+                ctx.topic = topic
             if activity is not None:
                 ctx.activity = activity
             if language is not None:
@@ -284,6 +288,16 @@ def resolve_turn(parsed: ParsedQuery, ctx: Optional[ConversationContext]) -> Res
         parsed.intent = ctx.intent  # type: ignore[assignment]
         parsed.intent_reason = f"{parsed.intent_reason}; topic carried from previous turn"
         context_used["intent"] = "context"
+
+    # ---- fine-grained topic ----------------------------------------------- #
+    # A specific new topic always wins; a vague follow-up inherits the prior practical topic so
+    # "is it going to rain?" -> "should I carry an umbrella?" stays coherent and "what about
+    # Pune?" keeps asking the same practical thing for the new place.
+    if parsed.topic and parsed.topic != "other":
+        context_used["topic"] = "message"
+    elif ctx is not None and ctx.topic:
+        parsed.topic = ctx.topic  # type: ignore[assignment]
+        context_used["topic"] = "context"
 
     parsed.notes.append(
         "conversation context: " + ", ".join(f"{k} from {v}" for k, v in context_used.items())

@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 
 from backend import main
 from backend.models import GeocodeResult, ResolvedLocation
+from backend.services import parsing
 
 # --------------------------------------------------------------------------- #
 # offline pipeline scaffolding (same approach as test_u1_disaster_alerts)
@@ -442,3 +443,162 @@ def test_http_session_continuity_and_reset(monkeypatch):
     assert rr.json()["ok"] is True
     r3 = client.post("/api/query", json={"message": "is it safe to travel?", "session_id": sid})
     assert r3.json()["status"] == "clarify"           # context gone -> asks again
+
+
+# =========================================================================== #
+# U3.1 — shared session across Chat & Voice, fine-grained topic, word order,
+# and non-conversational background calls that must not touch conversation.
+# =========================================================================== #
+def _http():
+    return TestClient(main.app)
+
+
+def _ask(client, msg, sid, *, conversational=True, pipeline=True):
+    return client.post("/api/query", json={
+        "message": msg, "session_id": sid, "include_pipeline": pipeline,
+        "conversational": conversational,
+    }).json()
+
+
+def _parse_topic(resp):
+    ps = next((s for s in resp.get("pipeline", {}).get("stages", []) if s["stage"] == "parse"), {})
+    return ps.get("topic"), ps.get("timeframe"), ps.get("intent")
+
+
+def test_u31_chat_then_voice_followup_shares_session(monkeypatch):
+    """Reproduces the reported bug: a Chat turn establishes Mumbai, then a Voice follow-up
+    'Is it going to rain?' must resolve to Mumbai (not ask for the location)."""
+    _patch(monkeypatch)
+    c = _http(); sid = "shared-chat-voice"
+    r1 = _ask(c, "What's the weather in Mumbai tomorrow?", sid)
+    assert (r1["evidence"].get("location") or {}).get("name") == "Mumbai"
+    # Voice sends the SAME session id (the frontend auto-injects it).
+    r2 = _ask(c, "Is it going to rain?", sid)
+    assert r2["status"] != "clarify", r2
+    assert (r2["evidence"].get("location") or {}).get("name") == "Mumbai"
+    topic, tf, _intent = _parse_topic(r2)
+    assert topic == "rain_prediction" and tf == "tomorrow"
+
+
+def test_u31_voice_should_i_go_keeps_travel_safety(monkeypatch):
+    _patch(monkeypatch)
+    c = _http(); sid = "voice-go"
+    _ask(c, "Is it safe to travel in Mumbai?", sid)
+    r = _ask(c, "Should I go?", sid)
+    assert (r["evidence"].get("location") or {}).get("name") == "Mumbai"
+    topic, _tf, intent = _parse_topic(r)
+    assert topic == "travel_safety" and intent == "advisory_risk"
+
+
+def test_u31_full_natural_conversation_topic_evolution(monkeypatch):
+    _patch(monkeypatch)
+    c = _http(); sid = "natural-convo"
+    expected = [
+        ("What's the weather in Mumbai tomorrow?", "Mumbai", "tomorrow", "weather_summary"),
+        ("Is it going to rain?", "Mumbai", "tomorrow", "rain_prediction"),
+        ("Should I carry an umbrella?", "Mumbai", "tomorrow", "umbrella_advice"),
+        ("Is it safe to travel?", "Mumbai", "tomorrow", "travel_safety"),
+        ("What about Pune?", "Pune", "tomorrow", "travel_safety"),
+        ("And tomorrow morning?", "Pune", "tomorrow", "travel_safety"),
+    ]
+    for msg, place, tf, topic in expected:
+        r = _ask(c, msg, sid)
+        assert (r["evidence"].get("location") or {}).get("name") == place, (msg, r["status"])
+        got_topic, got_tf, _i = _parse_topic(r)
+        assert got_tf == tf, (msg, got_tf)
+        assert got_topic == topic, (msg, got_topic)
+
+
+def test_u31_navigation_context_survives_between_features(monkeypatch):
+    """Context must not disappear when the user switches Chat <-> Voice: both use one id."""
+    _patch(monkeypatch)
+    c = _http(); sid = "navigate"
+    _ask(c, "What's the weather in Mumbai tomorrow?", sid)   # Chat
+    r_voice = _ask(c, "Is it going to rain?", sid)           # Voice page
+    assert (r_voice["evidence"].get("location") or {}).get("name") == "Mumbai"
+    r_chat = _ask(c, "Should I carry an umbrella?", sid)     # back to Chat
+    assert (r_chat["evidence"].get("location") or {}).get("name") == "Mumbai"
+
+
+def test_u31_sessions_isolated_with_distinct_contexts(monkeypatch):
+    _patch(monkeypatch)
+    c = _http()
+    _ask(c, "weather in Mumbai", "session-A")
+    _ask(c, "weather in Pune", "session-B")
+    # Session B asking a bare follow-up must resolve Pune, never Mumbai.
+    rB = _ask(c, "is it safe to travel?", "session-B")
+    assert (rB["evidence"].get("location") or {}).get("name") == "Pune"
+    # A brand-new session with no history must clarify.
+    rC = _ask(c, "is it safe to travel?", "session-C")
+    assert rC["status"] == "clarify"
+
+
+def test_u31_clear_creates_new_session_and_forgets(monkeypatch):
+    _patch(monkeypatch)
+    c = _http(); sid = "to-be-cleared"
+    _ask(c, "weather in Mumbai", sid)
+    c.post("/api/session/reset", json={"session_id": sid})
+    r = _ask(c, "is it safe to travel?", sid)
+    assert r["status"] == "clarify"          # previous location forgotten
+
+
+def test_u31_background_non_conversational_call_does_not_touch_memory(monkeypatch):
+    _patch(monkeypatch)
+    c = _http(); sid = "bg-guard"
+    # A dashboard/data-sync style request for Pune, flagged non-conversational.
+    _ask(c, "current weather in Pune", sid, conversational=False)
+    assert main.context.STORE.get(sid) is None          # nothing remembered
+    # ...so a bare conversational follow-up still clarifies (Pune never leaked into memory).
+    r = _ask(c, "is it safe to travel?", sid, conversational=True)
+    assert r["status"] == "clarify"
+    # A non-conversational call must also NOT READ context: established Mumbai convo stays intact
+    _ask(c, "weather in Mumbai", sid, conversational=True)
+    _ask(c, "current weather in Pune", sid, conversational=False)
+    r2 = _ask(c, "is it going to rain?", sid, conversational=True)
+    assert (r2["evidence"].get("location") or {}).get("name") == "Mumbai"
+
+
+@pytest.mark.parametrize("msg,place,tf,topic", [
+    ("kya kal baarish hogi mumbai mei?", "Mumbai", "tomorrow", "rain_prediction"),
+    ("kal Mumbai mein baarish hogi?", "Mumbai", "tomorrow", "rain_prediction"),
+    ("kya kal Mumbai mein baarish hogi?", "Mumbai", "tomorrow", "rain_prediction"),
+    ("Mumbai mein kal baarish hogi?", "Mumbai", "tomorrow", "rain_prediction"),
+    ("kya kal baarish hogi Mumbai mein?", "Mumbai", "tomorrow", "rain_prediction"),
+    ("Mumbai me kal rain hogi kya?", "Mumbai", "tomorrow", "rain_prediction"),
+    ("aaj Pune ka mausam kaisa hai?", "Pune", "today", "weather_summary"),
+])
+def test_u31_hinglish_word_order_variants(monkeypatch, msg, place, tf, topic):
+    p = parsing.parse(msg)
+    assert p.location_text == place, (msg, p.location_text)
+    assert p.timeframe == tf, (msg, p.timeframe)
+    assert p.topic == topic, (msg, p.topic)
+
+
+def test_u31_llm_still_receives_only_evidence_with_topic(monkeypatch):
+    """Adding topic/context must not change the LLM contract: it gets one Evidence object with
+    no conversation/messages/history fields."""
+    from backend.services import llm as L
+    _patch(monkeypatch)
+    captured = {}
+    real = L.explain
+
+    async def cap(ev):
+        captured["dump"] = ev.model_dump(mode="json")
+        return await real(ev)
+
+    monkeypatch.setattr(main.llm_service, "explain", cap)
+    c = _http(); sid = "llm-iso"
+    _ask(c, "weather in Mumbai", sid)
+    _ask(c, "is it going to rain tomorrow?", sid)
+    for forbidden in ("messages", "chat_history", "conversation", "history", "turns", "topic"):
+        assert forbidden not in captured["dump"], forbidden
+
+
+def test_u31_no_sample_alert_on_fresh_startup_backend(monkeypatch):
+    """Part A regression: a healthy empty SACHET yields no alerts and live mode by default."""
+    _patch(monkeypatch, place="mumbai", alerts=_empty_alerts())
+    c = _http()
+    r = c.post("/api/query", json={"message": "weather in Mumbai", "session_id": "fresh-a"}).json()
+    assert r["evidence"]["alerts"]["state"] == "checked"
+    assert r["evidence"]["alerts"]["items"] == []
+    assert r["evidence"]["alerts"]["mode"] in ("live", "not_run")

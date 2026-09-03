@@ -46,6 +46,13 @@ export const QueryRoutingBreakdown: React.FC<QueryRoutingBreakdownProps> = ({ an
             </div>
           </div>
 
+          {analysis.topicLabel && (
+            <div className="flex items-center gap-1.5 bg-[#F7FBF8] p-2 rounded-lg border border-[#DCEAE2]">
+              <Cpu className="w-3.5 h-3.5 text-[#2E7D5B]" />
+              <span>Topic: <strong>{analysis.topicLabel}</strong></span>
+            </div>
+          )}
+
           <div className="flex items-center justify-between text-[11px] text-[#6B7D74] pt-1 flex-wrap gap-1">
             <span>Sources: <strong>{analysis.dataSourcesUsed.join(' + ')}</strong></span>
             <span

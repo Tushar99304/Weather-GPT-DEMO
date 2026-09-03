@@ -40,6 +40,6 @@ export async function getCurrentWeather(
     return { evidence: sampleWeather(locationId), isSample: true };
   }
   const message = `What is the current weather in ${locationHint || locationId}?`;
-  const res = await queryBackend({ message, locationHint: locationHint || locationId });
+  const res = await queryBackend({ message, locationHint: locationHint || locationId, conversational: false });
   return { evidence: mapEvidence(res.evidence), isSample: false };
 }

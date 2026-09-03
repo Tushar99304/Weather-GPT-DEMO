@@ -47,6 +47,7 @@ export async function getAdvisoryForActivity(
     message: `Is it safe for ${activity} in ${locationName}? Give the weather-related risk.`,
     locationHint: locationName,
     activity,
+    conversational: false,
   });
   const advisory =
     mapAdvisory(

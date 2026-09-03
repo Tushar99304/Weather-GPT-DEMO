@@ -183,6 +183,8 @@ export interface QueryAnalysis {
   groundingNote?: string;
   /** U3: slots a follow-up inherited from the previous turn (e.g. location from context). */
   contextUsed?: string[];
+  /** U3: fine-grained practical topic resolved by the backend (rain, umbrella, travel…). */
+  topicLabel?: string;
 }
 
 export interface ChatMessage {

@@ -65,8 +65,19 @@ export interface QueryParams {
   latitude?: number;
   longitude?: number;
   includePipeline?: boolean;
-  /** U3: conversation id for context continuity (follow-ups without repeating the place). */
+  /**
+   * U3: conversation id for context continuity (follow-ups without repeating the place).
+   * If omitted, the SHARED active session id is used automatically, so every feature that
+   * sends a natural-language query (Chat, Voice, follow-ups) shares one session. Pass an
+   * explicit id only to override; the app never generates a per-request id.
+   */
   sessionId?: string;
+  /**
+   * True (default) = a user-to-assistant turn that participates in conversation context.
+   * Background UI data-sync calls (dashboard current/forecast/alerts) pass false so they
+   * neither read nor write the active conversation's memory.
+   */
+  conversational?: boolean;
 }
 
 /** POST /api/query — the full grounded pipeline (chat, dashboard, advisory, alerts). */
@@ -80,7 +91,8 @@ export function queryBackend(params: QueryParams): Promise<BackendQueryResponse>
       latitude: params.latitude,
       longitude: params.longitude,
       include_pipeline: params.includePipeline ?? false,
-      session_id: params.sessionId,
+      session_id: params.sessionId ?? getSessionId(),
+      conversational: params.conversational ?? true,
     }),
   });
 }

@@ -172,13 +172,16 @@ async def run_pipeline(
     activity: str | None = None,
     coordinates: tuple[float, float] | None = None,
     session_id: str | None = None,
+    conversational: bool = True,
 ) -> tuple[Evidence, Dict[str, Any]]:
     """Shared by /api/query and the phase-1 test script, so tests exercise the real path.
 
-    U3: ``session_id`` enables the controlled conversation-context layer. Context fills ONLY
-    the slots a new message leaves blank (location/timeframe/intent/activity) from the previous
-    *resolved* turn. It never injects raw history into the LLM — the model still receives exactly
-    one structured Evidence object. See backend/services/context.py.
+    U3: ``session_id`` + ``conversational=True`` enable the controlled conversation-context
+    layer (Chat/Voice turns). Context fills ONLY the slots a new message leaves blank
+    (location/timeframe/intent/activity/topic) from the previous *resolved* turn. It never
+    injects raw history into the LLM — the model still receives exactly one structured Evidence
+    object. Background UI data-sync calls pass ``conversational=False``: they neither read nor
+    write session memory, so the active conversation is never disturbed. See context.py.
     """
     trace: Dict[str, Any] = {"stages": []}
 
@@ -188,8 +191,12 @@ async def run_pipeline(
     parsed: ParsedQuery = parsing.parse(message, today=dt.date.today())
 
     # ---- U3: conversation-context resolution (structured slots only, no raw history) ---- #
-    prior_ctx = context.STORE.get(session_id) if session_id else None
-    turn = context.resolve_turn(parsed, prior_ctx)
+    prior_ctx = context.STORE.get(session_id) if (session_id and conversational) else None
+    if conversational:
+        turn = context.resolve_turn(parsed, prior_ctx)
+    else:
+        # Background/non-conversational request: resolve nothing from memory, inherit nothing.
+        turn = context.ResolvedTurn(parsed=parsed, context_used={}, carried_location=False)
     context_carried: Dict[str, str] = dict(turn.context_used)
     # A remembered RESOLVED location lets us skip geocoding entirely for follow-ups ("there").
     remembered_location = prior_ctx.location if (prior_ctx and turn.carried_location) else None
@@ -201,6 +208,7 @@ async def run_pipeline(
         {
             "intent": turn.parsed.intent,
             "intent_reason": turn.parsed.intent_reason,
+            "topic": turn.parsed.topic,
             "location_text": turn.parsed.location_text,
             "timeframe": turn.parsed.timeframe,
             "timeframe_reason": turn.parsed.timeframe_reason,
@@ -212,10 +220,11 @@ async def run_pipeline(
     )
     parsed = turn.parsed
 
-    # A reference with no antecedent (e.g. "Is it safe to travel?" as the very first message):
-    # ask instead of guessing a location. No weather is retrieved on this path.
-    if turn.needs_clarification and remembered_location is None and coordinates is None \
-            and _coords_from_hint(location_hint) is None:
+    # A reference with no antecedent (e.g. "Is it safe to travel?" as the very first CONVERSATIONAL
+    # message): ask instead of guessing a location. Background (non-conversational) calls always
+    # carry an explicit place/coordinates and never trigger this conversational clarification.
+    if conversational and turn.needs_clarification and remembered_location is None \
+            and coordinates is None and _coords_from_hint(location_hint) is None:
         ev = Evidence(
             status="clarify",
             request={"message": message, "intent": parsed.intent, "timeframe": parsed.timeframe},
@@ -333,8 +342,9 @@ async def run_pipeline(
     # ---- U3: remember this turn's RESOLVED slots for the next message in THIS session ---- #
     # Only the small structured context is stored (place + coords + timeframe + intent +
     # activity). Raw chat text is never stored and never reaches the LLM. A turn that failed to
-    # geocode never reaches here, so memory only ever contains verified places.
-    if session_id:
+    # geocode never reaches here, so memory only ever contains verified places. Only
+    # CONVERSATIONAL turns (Chat/Voice) touch the store; background sync calls are excluded.
+    if session_id and conversational:
         context.STORE.put(
             session_id,
             location_text=parsed.location_text or loc.name,
@@ -342,13 +352,15 @@ async def run_pipeline(
             timeframe=parsed.timeframe,
             target_date=parsed.target_date,
             intent=parsed.intent if parsed.intent != "clarification_needed" else None,
+            topic=parsed.topic,
             activity=effective_activity,
         )
         trace["conversation"] = {
             "session_id": session_id,
             "context_used": context_carried,
             "remembered": {"location": loc.name, "timeframe": parsed.timeframe,
-                           "intent": parsed.intent, "activity": effective_activity},
+                           "intent": parsed.intent, "topic": parsed.topic,
+                           "activity": effective_activity},
         }
 
     # ---- retrieve live evidence (weather + official alerts, concurrently) ---- #
@@ -577,6 +589,7 @@ async def query(req: QueryRequest) -> QueryResponse:
         activity=req.activity,
         coordinates=coords,
         session_id=req.session_id,
+        conversational=req.conversational,
     )
     return QueryResponse(
         status=ev.status,  # type: ignore[arg-type]
@@ -609,12 +622,13 @@ async def pipeline_get(
     latitude: float | None = None,
     longitude: float | None = None,
     session_id: str | None = None,
+    conversational: bool = True,
 ) -> Dict[str, Any]:
     """GET twin of /api/query — convenient for curl/PowerShell during the sprint."""
     coords = (latitude, longitude) if (latitude is not None and longitude is not None) else None
     ev, trace = await run_pipeline(
         message, location_hint=location_hint, activity=activity, coordinates=coords,
-        session_id=session_id,
+        session_id=session_id, conversational=conversational,
     )
     return {"status": ev.status, "evidence": ev.model_dump(), "pipeline": trace}
 

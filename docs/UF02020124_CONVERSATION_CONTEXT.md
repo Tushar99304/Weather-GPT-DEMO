@@ -116,6 +116,56 @@ Devanagari place names are mapped via a small alias table; an unmapped Devanagar
 - Context never crosses with the LLM: the model never sees history, so it cannot "remember"
   free-form facts — only the structured slots the pipeline carries.
 
+## U3.1 — One shared session across Chat AND Voice (integration pass)
+
+**Root cause of the Voice bug.** The Voice page (`components/voice/VoiceControl.tsx`) called
+`askWeatherGPT(...)` **without** passing a `sessionId`, so every spoken query ran with no
+session → the backend had no antecedent and correctly asked "Which location…". Other
+`/api/query` callers (dashboard current/forecast/alert/advisory services) sent no id either.
+
+**Fix — a single shared session mechanism, used by every natural-language query:**
+
+- The session id lives in ONE place (`services/backendClient.ts`): `getSessionId()` reads/
+  lazily-mints an opaque id persisted in `localStorage` (per tab/conversation).
+- `queryBackend()` **auto-injects `session_id` = `getSessionId()`** whenever a caller doesn't
+  pass one explicitly, and always sends a `conversational` flag. Chat and Voice therefore share
+  the identical session with no per-page or per-request id generation.
+- "Clear chat / new conversation" calls `newSessionId()` (rotates the id) **and**
+  `POST /api/session/reset` (forgets the backend's context for the old id).
+- **Conversational vs background:** Chat/Voice turns send `conversational: true` (read + write
+  the context). Dashboard sync fetches (`weatherService`, `forecastService`, `alertService`,
+  `advisoryService`) send `conversational: false`: they neither read nor write conversation
+  memory, so loading/refreshing a page can never hijack or pollute the active conversation.
+- The backend gates context on this flag: non-conversational calls skip `resolve_turn`, never
+  trigger the missing-location clarify, and never call `STORE.put`.
+
+**Fine-grained intent (topic).** `ParsedQuery.topic` (additive; risk still comes only from the
+advisory engine) classifies the practical ask: `rain_prediction`, `umbrella_advice`,
+`travel_safety`, `outdoor_suitability`, `temperature`, `weather_summary`, `official_alert`,
+`historical_climate`. A specific new topic wins; a vague follow-up inherits the prior topic, so
+"Is it going to rain?" → "Should I carry an umbrella?" stays coherent and "What about Pune?"
+keeps asking the same thing for the new place. Shown in the "How WeatherGPT understood…" panel.
+
+**Multilingual word order.** The Hinglish location rule now captures the single place token
+immediately before a postposition (`mumbai mei/me/mein/ka/…`), independent of word order, so
+all of these resolve to Mumbai + tomorrow + rain:
+`kya kal baarish hogi mumbai mei?`, `Mumbai mein kal baarish hogi?`, `kya kal Mumbai mein…`,
+`kya kal baarish hogi Mumbai mein?`, `Mumbai me kal rain hogi kya?`, `kal Mumbai mein…`.
+
+### Verified conversation evolution (offline, shared session across Chat→Voice→Chat)
+
+| Turn | Message | location | timeframe | topic |
+| --- | --- | --- | --- | --- |
+| T1 | What's the weather in Mumbai tomorrow? | Mumbai | tomorrow | weather_summary |
+| T2 | Is it going to rain? | Mumbai | tomorrow | rain_prediction |
+| T3 | Should I carry an umbrella? | Mumbai | tomorrow | umbrella_advice |
+| T4 | Is it safe to travel? | Mumbai | tomorrow | travel_safety |
+| T5 | What about Pune? | Pune | tomorrow | travel_safety |
+| T6 | And tomorrow morning? | Pune | tomorrow | travel_safety |
+
+Session isolation (A=Mumbai vs B=Pune vs C=none → clarify) and "clear → new session forgets"
+are regression-tested.
+
 ## Tests
 
 - `tests/test_u3_conversation.py` — 29 offline tests (context resolution, reference rules,

@@ -319,6 +319,9 @@ export function mapQueryAnalysis(
         .filter(([, from]) => from === 'context')
         .map(([slot]) => slot)
     : undefined;
+  // Fine-grained practical topic from the parse stage (query understanding only).
+  const stages = (pipeline?.stages ?? []) as Array<{ stage?: string; topic?: string }>;
+  const topic = stages.find((s) => s.stage === 'parse')?.topic;
   return {
     intent: mapIntent(ev),
     location: ev.location?.name ?? 'Unknown location',
@@ -330,7 +333,23 @@ export function mapQueryAnalysis(
     groundingVerified: answer?.grounding?.verified,
     groundingNote: answer?.grounding?.note || undefined,
     contextUsed: contextUsed && contextUsed.length ? contextUsed : undefined,
+    topicLabel: topic && topic !== 'other' ? humanizeTopic(topic) : undefined,
   };
+}
+
+/** Turn the backend topic key into a short, human label for the "how understood" panel. */
+function humanizeTopic(topic: string): string {
+  const labels: Record<string, string> = {
+    weather_summary: 'Weather summary',
+    temperature: 'Temperature',
+    rain_prediction: 'Rain prediction',
+    umbrella_advice: 'Umbrella / rain practical advice',
+    travel_safety: 'Travel safety',
+    outdoor_suitability: 'Outdoor activity suitability',
+    official_alert: 'Official alert',
+    historical_climate: 'Historical / climate',
+  };
+  return labels[topic] ?? topic.replace(/_/g, ' ');
 }
 
 /* --------------------------------------------------------- whole query */

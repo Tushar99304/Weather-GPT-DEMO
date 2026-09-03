@@ -40,6 +40,7 @@ export async function getForecast(
   const res = await queryBackend({
     message: `What is the weather forecast for ${locationHint || locationId} today and tomorrow?`,
     locationHint: locationHint || locationId,
+    conversational: false,
   });
   return {
     hourly: mapHourly(res.evidence.weather?.hourly),

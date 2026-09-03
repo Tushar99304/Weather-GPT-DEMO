@@ -38,6 +38,7 @@ export async function getActiveAlerts(
   const res = await queryBackend({
     message: `Are there any official weather alerts or warnings for ${locationHint || locationId || 'this area'}?`,
     locationHint: locationHint || locationId,
+    conversational: false,
   });
   const { active, expired } = mapAlerts(res.evidence);
   return {

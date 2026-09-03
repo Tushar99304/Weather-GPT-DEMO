@@ -397,12 +397,34 @@ class QueryRequest(BaseModel):
     # overrides a place the user explicitly named.
     latitude: Optional[float] = Field(default=None, ge=-90, le=90)
     longitude: Optional[float] = Field(default=None, ge=-180, le=180)
+    # U3: True for a user-to-assistant conversational turn (Chat, Voice) that SHOULD participate
+    # in session context. Background/UI data-sync queries (dashboard current/forecast/alerts)
+    # pass False: they neither READ the conversation memory nor WRITE it, so they can never
+    # pollute or hijack the active conversation.
+    conversational: bool = True
+
+
+# U3: fine-grained conversational TOPIC (what the user is practically asking about). This is a
+# slot for the resolver/UI only — it never changes risk logic, which is driven solely by the
+# validated evidence and the deterministic advisory engine (which reads `intent` + numbers).
+QueryTopic = Literal[
+    "weather_summary",     # general conditions / "what's the weather"
+    "temperature",         # hot/cold, temperature
+    "rain_prediction",     # will it rain
+    "umbrella_advice",     # carry an umbrella / rain practical
+    "travel_safety",       # safe to travel/go, risk
+    "outdoor_suitability", # picnic/outdoor/marathon/outing suitability
+    "official_alert",      # alerts/warnings
+    "historical_climate",  # past/averages/climate
+    "other",
+]
 
 
 class ParsedQuery(BaseModel):
     message: str
     intent: Intent = "forecast_current"
     intent_reason: str = "phase1_default"
+    topic: QueryTopic = "other"
     location_text: Optional[str] = None
     timeframe: Timeframe = "now"
     timeframe_reason: str = "phase1_default"

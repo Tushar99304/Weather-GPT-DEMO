@@ -7,7 +7,7 @@
  */
 import type { QueryAnalysis, WeatherAlert, WeatherEvidence } from '../types';
 import { MOCK_ALERTS } from '../mocks/alerts';
-import { queryBackend } from './backendClient';
+import { getSessionId, queryBackend } from './backendClient';
 import {
   detectLanguage,
   mapAdvisory,
@@ -105,7 +105,10 @@ export async function askWeatherGPT(
     // from the previous turn's structured context — the frontend sends no chat history.
     locationHint: currentLocationName,
     activity,
-    sessionId,
+    // Conversational turn: use the shared session (the caller may pass it explicitly; default
+    // to the shared id so Chat AND Voice always participate in the SAME conversation).
+    sessionId: sessionId ?? getSessionId(),
+    conversational: true,
     includePipeline: true, // needed to show which slots a follow-up inherited ("how understood")
   });
 
