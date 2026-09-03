@@ -1,0 +1,150 @@
+import React, { useState } from 'react';
+import type { ChatMessage as ChatMessageType } from '../../types';
+import { EvidencePanel } from '../common/EvidencePanel';
+import { QueryRoutingBreakdown } from './QueryRoutingBreakdown';
+import { WhyThisAnswerDrawer } from './WhyThisAnswerDrawer';
+import { voiceService } from '../../services/voiceService';
+import { 
+  Volume2, 
+  Copy, 
+  Share2, 
+  HelpCircle, 
+  Check, 
+  AlertTriangle,
+  CloudSun,
+  User
+} from 'lucide-react';
+
+interface ChatMessageProps {
+  message: ChatMessageType;
+}
+
+export const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
+  const [copied, setCopied] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [showWhyDrawer, setShowWhyDrawer] = useState(false);
+
+  const isUser = message.sender === 'user';
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(message.text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleListen = () => {
+    if (isSpeaking) {
+      voiceService.stopSpeaking();
+      setIsSpeaking(false);
+    } else {
+      setIsSpeaking(true);
+      const lang = message.language === 'Hinglish' || message.language === 'Hindi' ? 'hi-IN' : 'en-IN';
+      voiceService.speak(message.text, lang, () => setIsSpeaking(false));
+    }
+  };
+
+  const handleShare = () => {
+    if (navigator.share) {
+      navigator.share({
+        title: 'WeatherGPT Intelligence',
+        text: message.text,
+      }).catch(() => {});
+    } else {
+      handleCopy();
+    }
+  };
+
+  if (isUser) {
+    return (
+      <div className="flex justify-end my-3">
+        <div className="flex items-start gap-2.5 max-w-xl">
+          <div className="bg-[#2E7D5B] text-white p-3.5 rounded-2xl rounded-tr-xs shadow-xs text-sm">
+            <p className="leading-relaxed">{message.text}</p>
+            <span className="text-[10px] opacity-75 mt-1 block text-right">{message.timestamp}</span>
+          </div>
+          <div className="w-8 h-8 rounded-full bg-[#E8F5EE] border border-[#6BAF92]/40 flex items-center justify-center text-[#2E7D5B] shrink-0">
+            <User className="w-4 h-4" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex justify-start my-4">
+      <div className="flex items-start gap-3 max-w-2xl w-full">
+        <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#2E7D5B] to-[#6BAF92] flex items-center justify-center text-white shrink-0 shadow-xs mt-0.5">
+          <CloudSun className="w-5 h-5" />
+        </div>
+
+        <div className="space-y-3 flex-1 min-w-0">
+          {/* Main Answer Bubble */}
+          <div className="bg-white border border-[#DCEAE2] p-4 rounded-2xl rounded-tl-xs shadow-xs text-sm text-[#17352A] space-y-3">
+            {/* Active Official Warning Banner if present */}
+            {message.activeAlert && (
+              <div className="bg-red-50 border border-red-200 text-red-900 p-3 rounded-xl flex items-start gap-2 text-xs font-medium">
+                <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="block font-bold">⚠ {message.activeAlert.title}</strong>
+                  <span>{message.activeAlert.officialMessage}</span>
+                </div>
+              </div>
+            )}
+
+            <p className="leading-relaxed font-medium">{message.text}</p>
+
+            {/* Action Bar (Listen, Copy, Share, Why this answer?) */}
+            <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-[#DCEAE2] text-xs">
+              <button
+                onClick={handleListen}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg transition-colors ${
+                  isSpeaking ? 'bg-[#2E7D5B] text-white' : 'bg-[#F7FBF8] text-[#17352A] hover:bg-[#E8F5EE]'
+                }`}
+              >
+                <Volume2 className="w-3.5 h-3.5" />
+                <span>{isSpeaking ? 'Stop' : 'Listen'}</span>
+              </button>
+
+              <button
+                onClick={handleCopy}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#F7FBF8] text-[#17352A] hover:bg-[#E8F5EE] transition-colors"
+              >
+                {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copied ? 'Copied' : 'Copy'}</span>
+              </button>
+
+              <button
+                onClick={handleShare}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#F7FBF8] text-[#17352A] hover:bg-[#E8F5EE] transition-colors"
+              >
+                <Share2 className="w-3.5 h-3.5" />
+                <span>Share</span>
+              </button>
+
+              {message.evidence && (
+                <button
+                  onClick={() => setShowWhyDrawer(true)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#E8F5EE] text-[#2E7D5B] font-semibold hover:bg-[#2E7D5B] hover:text-white transition-colors ml-auto"
+                >
+                  <HelpCircle className="w-3.5 h-3.5" />
+                  <span>Why this answer?</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Structured Weather Evidence beneath answer */}
+          {message.evidence && <EvidencePanel evidence={message.evidence} compact />}
+
+          {/* Optional Technical Routing breakdown for SIH Judge evaluation */}
+          {message.queryAnalysis && <QueryRoutingBreakdown analysis={message.queryAnalysis} />}
+        </div>
+      </div>
+
+      {/* Why This Answer Evidence Drawer Modal */}
+      {showWhyDrawer && message.evidence && (
+        <WhyThisAnswerDrawer evidence={message.evidence} onClose={() => setShowWhyDrawer(false)} />
+      )}
+    </div>
+  );
+};
