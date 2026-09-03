@@ -125,28 +125,32 @@ export const SettingsPage: React.FC = () => {
         </div>
       </div>
 
-      {/* SIH Demo Mode */}
+      {/* Sample demo data (default OFF; the real backend is the default) */}
       <div className="bg-white border border-[#DCEAE2] rounded-2xl p-5 shadow-xs space-y-4">
         <h3 className="font-bold text-sm text-[#17352A] border-b border-[#DCEAE2] pb-2 flex items-center gap-2">
-          <Sparkles className="w-4 h-4 text-amber-600" /> SIH Hackathon Demo Evaluation Mode
+          <Sparkles className="w-4 h-4 text-amber-600" /> Sample demo data
         </h3>
 
         <div className="flex items-center justify-between p-4 bg-amber-50 rounded-xl border border-amber-200 text-xs">
           <div>
-            <span className="font-bold text-amber-900 block">Realistic Grounded Demo Dataset</span>
-            <span className="text-amber-800 text-[11px]">
-              Allows complete prototype evaluation without requiring a live FastAPI backend connection.
+            <span className="font-bold text-amber-900 block">
+              Bundled SAMPLE dataset {preferences.demoMode ? '(currently ENABLED)' : '(currently OFF)'}
+            </span>
+            <span className="text-amber-800 text-[11px] block mt-0.5">
+              OFF by default. When enabled, the app shows clearly-labelled fabricated sample data
+              for walkthroughs without a backend — it is never official or live data. Normal use
+              talks to the real WeatherGPT backend.
             </span>
           </div>
           <button
             onClick={toggleDemoMode}
-            className={`px-3 py-1.5 rounded-xl font-bold text-xs border transition-colors ${
+            className={`px-3 py-1.5 rounded-xl font-bold text-xs border transition-colors shrink-0 ml-3 ${
               preferences.demoMode
                 ? 'bg-amber-600 text-white border-amber-700'
                 : 'bg-white text-gray-700 border-gray-300'
             }`}
           >
-            {preferences.demoMode ? 'ENABLED' : 'DISABLED'}
+            {preferences.demoMode ? 'SAMPLE DATA ON' : 'LIVE (DEFAULT)'}
           </button>
         </div>
       </div>

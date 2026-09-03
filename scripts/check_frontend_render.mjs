@@ -1,12 +1,16 @@
 /*
- * scripts/check_frontend_render.mjs — offline render test for frontend/index.html.
+ * scripts/check_frontend_render.mjs — offline render test for the REFERENCE single-file page
+ * frontend-old/index.html (the previous WeatherGPT UI, kept as fallback).
  *
- * The page is one inline <script> with no build step, so it can be evaluated directly with a fake
- * `document`/`fetch`. The payloads cover the states that have broken this page before (missing
- * blocks, absent alerts, abstain/clarify), the Phase 4 answer card, and the U1 official-alert UX
- * (prominent banner first, verbatim instruction shown and attributed, expired records never
- * rendered as active). Nothing here needs a backend, a key, or the internet — the payloads are
- * written out below so the assertions are reviewable as text.
+ * The production UI is the React/Vite app in frontend/; it has its own quality gate:
+ *   node scripts/check_frontend.mjs   (tsc + vite build + oxlint + mapper unit tests)
+ *
+ * This script covers the reference page, which is one inline <script> with no build step, so it
+ * can be evaluated directly with a fake `document`/`fetch`. The payloads cover the states that
+ * have broken this page before (missing blocks, absent alerts, abstain/clarify), the Phase 4
+ * answer card, and the U1 official-alert UX (prominent banner first, verbatim instruction shown
+ * and attributed, expired records never rendered as active). Nothing here needs a backend, a
+ * key, or the internet — the payloads are written out below so the assertions are reviewable.
  *
  * Run:  node scripts/check_frontend_render.mjs
  */
@@ -15,7 +19,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const html = fs.readFileSync(path.join(ROOT, "frontend/index.html"), "utf8");
+const html = fs.readFileSync(path.join(ROOT, "frontend-old/index.html"), "utf8");
 const src = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 
 const HEALTH = {

@@ -1,95 +1,78 @@
 import React from 'react';
 import { useWeatherStore } from '../../store/useWeatherStore';
 import { formatTemp, formatWind } from '../../utils/formatters';
-import { 
-  Thermometer, 
-  CloudRain, 
-  Droplets, 
-  Wind, 
-  Eye, 
-  Sun, 
-  Gauge,
-  TrendingUp,
-  TrendingDown
-} from 'lucide-react';
+import { Thermometer, CloudRain, Droplets, Wind, Cloudy, Gauge } from 'lucide-react';
 
+/**
+ * Detailed metric tiles. Only fields present in the backend current-conditions block are
+ * rendered. UV index and visibility are NOT provided by the evidence, and the old
+ * fabricated trend captions ("+1.5° vs yesterday", "peak at 2PM") were removed — the UI
+ * never invents comparisons the evidence does not contain.
+ */
 export const WeatherSummary: React.FC = () => {
   const { currentWeather, preferences } = useWeatherStore();
 
   if (!currentWeather) return null;
 
-  const metrics = [
+  const metrics: { title: string; value: string; icon: React.ElementType }[] = [
     {
       title: 'Temperature',
-      value: formatTemp(currentWeather.temperature, preferences.tempUnit),
-      subtitle: `Feels like ${formatTemp(currentWeather.feelsLike, preferences.tempUnit)}`,
+      value:
+        currentWeather.temperature != null
+          ? formatTemp(currentWeather.temperature, preferences.tempUnit)
+          : '—',
       icon: Thermometer,
-      trend: '+1.5° vs yesterday',
-      isUp: true,
     },
     {
-      title: 'Rain Probability',
-      value: `${currentWeather.rainProbability}%`,
-      subtitle: 'Peak at 2:00 PM IST',
+      title: 'Apparent temp.',
+      value:
+        currentWeather.feelsLike != null
+          ? formatTemp(currentWeather.feelsLike, preferences.tempUnit)
+          : '—',
+      icon: Thermometer,
+    },
+    {
+      title: 'Observed rainfall',
+      value: currentWeather.rainfall != null ? `${currentWeather.rainfall} mm` : '—',
       icon: CloudRain,
-      trend: '+12% during high tide',
-      isUp: true,
     },
     {
-      title: 'Observed Rainfall',
-      value: `${currentWeather.rainfall} mm`,
-      subtitle: 'IMD Coastal Station',
+      title: 'Rain probability (today)',
+      value: currentWeather.rainProbability != null ? `${currentWeather.rainProbability}%` : '—',
       icon: CloudRain,
-      trend: 'Moderate precipitation',
-      isUp: true,
     },
     {
-      title: 'Relative Humidity',
-      value: `${currentWeather.humidity}%`,
-      subtitle: 'High coastal vapor',
+      title: 'Relative humidity',
+      value: currentWeather.humidity != null ? `${currentWeather.humidity}%` : '—',
       icon: Droplets,
-      trend: '-3% since morning',
-      isUp: false,
     },
     {
-      title: 'Wind Vector',
-      value: formatWind(currentWeather.windSpeed, preferences.windUnit),
-      subtitle: 'WSW Coastal Gusts',
+      title: 'Wind speed',
+      value:
+        currentWeather.windSpeed != null
+          ? formatWind(currentWeather.windSpeed, preferences.windUnit)
+          : '—',
       icon: Wind,
-      trend: 'Gusts up to 28 km/h',
-      isUp: true,
     },
     {
-      title: 'Visibility',
-      value: `${currentWeather.visibility} km`,
-      subtitle: 'Reduced by monsoon fog',
-      icon: Eye,
-      trend: 'Normal highway clearance',
-      isUp: false,
+      title: 'Cloud cover',
+      value: currentWeather.cloudCover != null ? `${currentWeather.cloudCover}%` : '—',
+      icon: Cloudy,
     },
     {
-      title: 'UV Index',
-      value: `${currentWeather.uvIndex} / 11`,
-      subtitle: 'Moderate Solar Risk',
-      icon: Sun,
-      trend: 'Peak 12 PM - 3 PM',
-      isUp: false,
-    },
-    {
-      title: 'Barometric Pressure',
-      value: `${currentWeather.pressure} hPa`,
-      subtitle: 'Sea Level Standard',
+      title: 'Barometric pressure',
+      value: currentWeather.pressure != null ? `${currentWeather.pressure} hPa` : '—',
       icon: Gauge,
-      trend: '-2 hPa trough system',
-      isUp: false,
     },
   ];
 
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="font-bold text-[#17352A] text-lg">Today's Detailed Metrics</h3>
-        <span className="text-xs text-[#6B7D74]">IMD Station Verified</span>
+        <h3 className="font-bold text-[#17352A] text-lg">Current observations</h3>
+        <span className="text-xs text-[#6B7D74]">
+          Open-Meteo current block · research/repro
+        </span>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
@@ -106,20 +89,16 @@ export const WeatherSummary: React.FC = () => {
                   <Icon className="w-4 h-4" />
                 </div>
               </div>
-
-              <div className="text-xl font-bold text-[#17352A] mb-1">{m.value}</div>
-
-              <div className="flex items-center justify-between text-[11px] text-[#6B7D74]">
-                <span className="truncate">{m.subtitle}</span>
-                <span className="inline-flex items-center gap-0.5 text-[#2E7D5B] font-medium shrink-0">
-                  {m.isUp ? <TrendingUp className="w-3 h-3 text-[#2E7D5B]" /> : <TrendingDown className="w-3 h-3 text-[#6B7D74]" />}
-                  <span>{m.trend}</span>
-                </span>
-              </div>
+              <div className="text-xl font-bold text-[#17352A]">{m.value}</div>
             </div>
           );
         })}
       </div>
+
+      <p className="text-[11px] text-[#6B7D74]">
+        Values are the provider's reported current conditions. Open-Meteo is research/reproducibility
+        data; there is no live IMD feed wired into this build.
+      </p>
     </section>
   );
 };

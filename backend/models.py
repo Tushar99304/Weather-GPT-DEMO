@@ -105,6 +105,25 @@ class ForecastDay(BaseModel):
     units: Dict[str, str] = Field(default_factory=dict)
 
 
+class HourlyForecastPoint(BaseModel):
+    """One hourly forecast step (ADDITIVE, integration build). The same normalised,
+    provider-independent rules as everything else in the WeatherBundle: times are the
+    provider's LOCAL wall time at the asked-of place, and every value is the provider's
+    own number — never derived, filled or invented client-side. Used only for the hourly
+    UI strip; it is part of the Evidence object so the LLM sees exactly what the UI shows,
+    but no advisory/validation rule depends on it (Phase 3 invariants are unchanged)."""
+
+    time: str                       # local wall time at the location ("2026-09-03T14:00")
+    temperature_c: Optional[float] = None
+    precipitation_mm: Optional[float] = None
+    precipitation_probability_pct: Optional[float] = None
+    humidity_pct: Optional[float] = None
+    wind_speed_kmh: Optional[float] = None
+    weather_code: Optional[int] = None
+    condition: Optional[str] = None
+    units: Dict[str, str] = Field(default_factory=dict)
+
+
 class WeatherBundle(BaseModel):
     """What the weather provider returned for this location/request."""
 
@@ -125,6 +144,10 @@ class WeatherBundle(BaseModel):
     tomorrow: Optional[ForecastDay] = None
     target_day: Optional[ForecastDay] = None   # explicit date asked for ("on 2026-08-25")
     past_days: List[ForecastDay] = Field(default_factory=list)
+    # ADDITIVE (integration build): next ~24h of hourly steps for the dashboard strip.
+    # Empty for historical/archive calls (the archive path does not set it). Present only on
+    # live forecast fetches. Never populated from anything except the provider response.
+    hourly: List[HourlyForecastPoint] = Field(default_factory=list)
     requested_parameters: List[str] = Field(default_factory=list)
     request_url: str = ""           # exact URL called -> reproducible in front of judges
 
@@ -364,12 +387,47 @@ class QueryRequest(BaseModel):
     session_id: Optional[str] = None
     location_hint: Optional[str] = None    # e.g. user tapped "Pune, Maharashtra" in the UI
     include_pipeline: bool = True          # stage-by-stage trace: gold for judging/demo
+    # ADDITIVE (integration build): the UI's advisory page asks about a specific sector
+    # (driving/marine/agriculture/...). The value is passed straight through to the
+    # deterministic advisory engine (Advisory.activity); it never changes risk logic,
+    # thresholds or alert precedence — only which evidence the advisory emphasises.
+    activity: Optional[str] = None
+    # ADDITIVE: coordinates are only used when the message names no place AND a browser
+    # geolocation fix is supplied (e.g. "use my location"). Bypasses geocoding; never
+    # overrides a place the user explicitly named.
+    latitude: Optional[float] = Field(default=None, ge=-90, le=90)
+    longitude: Optional[float] = Field(default=None, ge=-180, le=180)
+    # U3: True for a user-to-assistant conversational turn (Chat, Voice) that SHOULD participate
+    # in session context. Background/UI data-sync queries (dashboard current/forecast/alerts)
+    # pass False: they neither READ the conversation memory nor WRITE it, so they can never
+    # pollute or hijack the active conversation.
+    conversational: bool = True
+    # U4: the user's chosen response language ("en" | "hi" | "mr" | "hinglish"). Rides inside the
+    # Evidence as ev.request.response_language; when null it is auto-detected from the message.
+    language: Optional[str] = None
+
+
+# U3: fine-grained conversational TOPIC (what the user is practically asking about). This is a
+# slot for the resolver/UI only — it never changes risk logic, which is driven solely by the
+# validated evidence and the deterministic advisory engine (which reads `intent` + numbers).
+QueryTopic = Literal[
+    "weather_summary",     # general conditions / "what's the weather"
+    "temperature",         # hot/cold, temperature
+    "rain_prediction",     # will it rain
+    "umbrella_advice",     # carry an umbrella / rain practical
+    "travel_safety",       # safe to travel/go, risk
+    "outdoor_suitability", # picnic/outdoor/marathon/outing suitability
+    "official_alert",      # alerts/warnings
+    "historical_climate",  # past/averages/climate
+    "other",
+]
 
 
 class ParsedQuery(BaseModel):
     message: str
     intent: Intent = "forecast_current"
     intent_reason: str = "phase1_default"
+    topic: QueryTopic = "other"
     location_text: Optional[str] = None
     timeframe: Timeframe = "now"
     timeframe_reason: str = "phase1_default"
@@ -381,6 +439,8 @@ class QueryResponse(BaseModel):
     status: Literal["grounded", "abstain", "clarify", "error"]
     user_message: str
     evidence: Evidence
+    # U3: echoed session id for conversation continuity (None if the client sent none).
+    session_id: Optional[str] = None
     pipeline: Dict[str, Any] = Field(default_factory=dict)
     # Phase 4: the phrased answer. Optional on purpose — when the LLM is unconfigured or the guard
     # rejects it, `answer` carries the deterministic fallback, and the Evidence object below stays

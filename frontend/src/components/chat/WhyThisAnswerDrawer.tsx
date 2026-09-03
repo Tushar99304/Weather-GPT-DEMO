@@ -41,25 +41,30 @@ export const WhyThisAnswerDrawer: React.FC<WhyThisAnswerDrawerProps> = ({ eviden
           </div>
 
           <div className="flex items-center justify-between p-2.5 bg-[#F7FBF8] rounded-xl border border-[#DCEAE2]">
-            <span className="text-[#6B7D74] flex items-center gap-1.5"><Clock className="w-4 h-4 text-[#2E7D5B]" /> Valid Time</span>
-            <span className="font-semibold text-[#17352A]">{evidence.validFrom}</span>
+            <span className="text-[#6B7D74] flex items-center gap-1.5"><Clock className="w-4 h-4 text-[#2E7D5B]" /> Retrieved (UTC)</span>
+            <span className="font-semibold text-[#17352A]">{evidence.retrievedAtUtc || '—'}</span>
           </div>
 
           <div className="flex items-center justify-between p-2.5 bg-[#F7FBF8] rounded-xl border border-[#DCEAE2]">
-            <span className="text-[#6B7D74] flex items-center gap-1.5"><Clock className="w-4 h-4 text-[#2E7D5B]" /> Last Updated</span>
+            <span className="text-[#6B7D74] flex items-center gap-1.5"><Clock className="w-4 h-4 text-[#2E7D5B]" /> Local observation time</span>
             <span className="font-semibold text-[#17352A]">{evidence.observedAt}</span>
           </div>
 
           <div className="flex items-center justify-between p-2.5 bg-[#E8F5EE] rounded-xl border border-[#6BAF92]/40">
             <span className="text-[#17352A] flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4 text-[#2E7D5B]" /> Evidence Quality</span>
             <span className="px-2 py-0.5 rounded bg-emerald-100 text-[#2E7D5B] font-bold border border-emerald-300">
-              {evidence.evidenceQuality}
+              {evidence.evidenceQuality || '—'}
             </span>
           </div>
         </div>
 
         <div className="bg-[#F7FBF8] p-3 rounded-xl border border-[#DCEAE2] text-[11px] text-[#6B7D74] leading-relaxed">
-          <strong>Met-Validation Policy:</strong> The LLM generated text explanation is strictly constrained by IMD observation values ({evidence.temperature}°C, {evidence.rainfall}mm rain, {evidence.rainProbability}% probability).
+          <strong>Grounding policy:</strong> the model only ever explains this one structured
+          evidence object — {evidence.temperature ?? '—'}°C, {evidence.rainfall ?? '—'} mm rain,
+          {evidence.rainProbability != null ? ` ${evidence.rainfall ?? '—'} mm with ${evidence.rainProbability}% daily rain probability,` : ' daily rain probability not available,'}{' '}
+          from {evidence.source} ({evidence.authority === 'official' ? 'official' : evidence.authority === 'sample' ? 'sample data' : 'research/repro model data'}).
+          Every number it states is re-verified against these values before the answer is shown;
+          official NDMA/SACHET alerts always outrank model weather.
         </div>
 
         <button

@@ -28,7 +28,7 @@ export const MOCK_DAILY_FORECASTS: Record<string, DailyForecast[]> = {
       icon: 'cloud-rain',
       humidity: 78,
       windSpeed: 22,
-      summary: 'Heavy afternoon showers with IMD Yellow Alert in effect for coastal districts.',
+      summary: 'SAMPLE demo: heavy afternoon showers (no real alert) for coastal districts.',
     },
     {
       date: '2026-09-03',
@@ -41,7 +41,7 @@ export const MOCK_DAILY_FORECASTS: Record<string, DailyForecast[]> = {
       icon: 'cloud-lightning',
       humidity: 84,
       windSpeed: 26,
-      summary: 'Significant rain activity predicted by IMD models during afternoon high tide.',
+      summary: 'Significant rain activity predicted by the demo model during afternoon high tide.',
     },
     {
       date: '2026-09-04',

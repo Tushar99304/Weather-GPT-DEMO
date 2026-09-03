@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useVoiceRecognition } from '../../hooks/useVoiceRecognition';
 import { askWeatherGPT } from '../../services/chatService';
+import { ttsLang } from '../../services/voiceService';
 import { useWeatherStore } from '../../store/useWeatherStore';
 import { Mic, Volume2, Sparkles, Languages } from 'lucide-react';
 import { EvidencePanel } from '../common/EvidencePanel';
@@ -10,7 +11,9 @@ export const VoiceControl: React.FC = () => {
   const [lastResponse, setLastResponse] = useState<{ text: string; evidence?: any } | null>(null);
   const [isProcessingResponse, setIsProcessingResponse] = useState(false);
 
-  const { currentLocation, preferences } = useWeatherStore();
+  // sessionId is the SHARED conversation id: Voice uses the exact same session as Chat, so a
+  // follow-up spoken after a chat turn ("Is it going to rain?") reuses the established place.
+  const { currentLocation, preferences, sessionId } = useWeatherStore();
 
   const {
     voiceState,
@@ -26,20 +29,26 @@ export const VoiceControl: React.FC = () => {
     try {
       const res = await askWeatherGPT(
         capturedTranscript,
-        currentLocation.name,
+        `${currentLocation.name}, ${currentLocation.state}`,
+        // U4: pass the selection straight through — Hinglish IS a response language (Romanized
+        // Hindi), not English; the backend auto-detects when a transcript doesn't match it.
         selectedLang,
-        preferences.demoMode
+        preferences.demoMode,
+        undefined,
+        // U3: the SAME shared session as Chat — never a per-request id.
+        sessionId,
       );
       setLastResponse({
         text: res.message,
         evidence: res.evidence,
       });
 
-      // Automatically speak out the response
-      const langCode = selectedLang === 'hi' || selectedLang === 'hinglish' ? 'hi-IN' : 'en-IN';
-      speakText(res.message, langCode);
+      // Automatically speak out the grounded response in the matching locale (hi-IN/mr-IN/en-IN).
+      speakText(res.message, ttsLang(selectedLang));
     } catch {
-      setLastResponse({ text: 'Sorry, I could not process your voice request.' });
+      setLastResponse({
+        text: 'Sorry — the WeatherGPT backend could not be reached, so I will not invent an answer. Please try again shortly.',
+      });
     } finally {
       setIsProcessingResponse(false);
     }
@@ -61,7 +70,7 @@ export const VoiceControl: React.FC = () => {
       case 'listening':
         return 'Listening to your question...';
       case 'processing':
-        return 'Analyzing intent & querying IMD evidence...';
+        return 'Retrieving & validating weather evidence...';
       case 'speaking':
         return 'WeatherGPT is speaking response...';
       case 'error':
@@ -143,7 +152,7 @@ export const VoiceControl: React.FC = () => {
               <Sparkles className="w-4 h-4" /> WeatherGPT Response
             </span>
             <button
-              onClick={() => speakText(lastResponse.text)}
+              onClick={() => speakText(lastResponse.text, ttsLang(selectedLang))}
               className="p-1.5 rounded-lg bg-white text-[#2E7D5B] hover:bg-[#2E7D5B] hover:text-white transition-colors"
               title="Replay Voice Response"
             >

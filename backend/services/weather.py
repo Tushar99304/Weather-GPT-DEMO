@@ -27,6 +27,7 @@ from backend import config
 from backend.models import (
     CurrentWeather,
     ForecastDay,
+    HourlyForecastPoint,
     Timeframe,
     WeatherBundle,
 )
@@ -188,6 +189,17 @@ class OpenMeteoProvider:
         "precipitation_probability_max",
         "wind_speed_10m_max",
     ]
+    # ADDITIVE (integration build): hourly variables for the dashboard strip.
+    # Free forecast tier, same provider, same provenance rules as the daily block.
+    HOURLY_VARS = [
+        "temperature_2m",
+        "precipitation",
+        "precipitation_probability",
+        "relative_humidity_2m",
+        "wind_speed_10m",
+        "weather_code",
+    ]
+    HOURLY_STEPS = 24  # expose the next 24 hours only
 
     async def fetch(
         self,
@@ -238,18 +250,23 @@ class OpenMeteoProvider:
             "longitude": round(longitude, 4),
             "current": ",".join(self.CURRENT_VARS),
             "daily": ",".join(self.DAILY_VARS),
-            "past_days": 1,
-            "forecast_days": 2,
+            "hourly": ",".join(self.HOURLY_VARS),  # ADDITIVE: next-24h strip
+            "forecast_days": 2,  # covers the hourly window; days below are sliced to today+tomorrow
             "timezone": timezone or "auto",
             "wind_speed_unit": "kmh",
         }
         if target_date:
             # Open-Meteo accepts an explicit range; drop the relative day knobs
-            # (they are mutually exclusive with start_date/end_date).
-            params.pop("past_days")
+            # (they are mutually exclusive with start_date/end_date). The hourly block for a
+            # single explicit day is not requested (past days come from the archive, and a
+            # future day's hourly strip is out of MVP scope) — the UI hides the strip then.
             params.pop("forecast_days")
+            params.pop("hourly")
+            params["past_days"] = 0
             params["start_date"] = target_date
             params["end_date"] = target_date
+        else:
+            params["past_days"] = 1
         model_name = ""
         if getattr(config, "OPEN_METEO_MODEL", ""):
             # Phase 5A: OPTIONAL single-model selection. Empty (default) => omit the param and let
@@ -258,6 +275,7 @@ class OpenMeteoProvider:
             params["models"] = config.OPEN_METEO_MODEL.strip()
             model_name = config.OPEN_METEO_MODEL.strip()
         data = await get_json(config.OPEN_METEO_FORECAST_URL, params=params, service="open-meteo")
+        # _bundle parses the hourly block too (when requested): it owns the location offset.
         return self._bundle(
             data,
             timeframe=timeframe,
@@ -356,7 +374,24 @@ class OpenMeteoProvider:
         if timeframe == "past" and not target_date:
             today = tomorrow = None
 
+        # ADDITIVE: hourly strip (live forecast only). Parsed here where the location offset is
+        # known; empty for historical calls or when the response carries no hourly block, so
+        # older payloads and archive rows are unaffected.
+        hourly = (
+            _zip_hourly(
+                data.get("hourly") or {},
+                offset,
+                data.get("hourly_units") or {},
+                current_time=(data.get("current") or {}).get("time"),
+                limit=self.HOURLY_STEPS,
+            )
+            if kind == "live" and data.get("hourly")
+            else []
+        )
+
         requested = [*self.CURRENT_VARS, *self.DAILY_VARS]
+        if kind == "live":
+            requested = [*requested, *self.HOURLY_VARS]
         # Report WHICH NWP model produced these numbers (Phase 5A). Live forecast = the explicit
         # OPEN_METEO_MODEL if set, else Open-Meteo's "best_match". Historical archive rows are
         # reanalysis, not a forecast model — labelled honestly and never pretending otherwise.
@@ -379,6 +414,7 @@ class OpenMeteoProvider:
             tomorrow=tomorrow,
             target_day=target_day,
             past_days=days,
+            hourly=hourly,
             requested_parameters=requested,
             request_url=f"{url}?{_qs(params)}",
         )
@@ -436,6 +472,47 @@ def _at(daily: Dict[str, Any], key: str, i: int) -> Optional[float]:
     if i < len(seq):
         return _f(seq[i])
     return None
+
+
+def _zip_hourly(
+    hourly: Dict[str, Any],
+    offset: Optional[int],
+    units: Dict[str, Any],
+    *,
+    current_time: Optional[str] = None,
+    limit: int = 24,
+) -> List[HourlyForecastPoint]:
+    """Normalise the provider's hourly block to the location clock, keeping at most `limit`
+    steps starting at (or just before) the provider's `current.time`. Pure reshape: every
+    value is the provider's own; gaps stay None and are never filled."""
+    times = hourly.get("time") or []
+    if not times:
+        return []
+    start_idx = 0
+    if current_time:
+        # current.time is the same naive-local ISO format as hourly.time.
+        cur = str(current_time)[:13]  # up to the hour, "YYYY-MM-DDTHH"
+        for i, t in enumerate(times):
+            if str(t)[:13] >= cur:
+                start_idx = i
+                break
+    out: List[HourlyForecastPoint] = []
+    for i in range(start_idx, min(len(times), start_idx + limit)):
+        code = _at(hourly, "weather_code", i)
+        out.append(
+            HourlyForecastPoint(
+                time=str(times[i]),
+                temperature_c=_at(hourly, "temperature_2m", i),
+                precipitation_mm=_at(hourly, "precipitation", i),
+                precipitation_probability_pct=_at(hourly, "precipitation_probability", i),
+                humidity_pct=_at(hourly, "relative_humidity_2m", i),
+                wind_speed_kmh=_at(hourly, "wind_speed_10m", i),
+                weather_code=int(code) if code is not None else None,
+                condition=condition_name(int(code)) if code is not None else None,
+                units=units or {},
+            )
+        )
+    return out
 
 
 _PROVIDER: Optional[WeatherProvider] = None
