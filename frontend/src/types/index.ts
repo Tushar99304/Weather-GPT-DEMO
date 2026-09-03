@@ -181,6 +181,8 @@ export interface QueryAnalysis {
   answerOrigin?: 'groq_llm' | 'deterministic_fallback';
   groundingVerified?: boolean;
   groundingNote?: string;
+  /** U3: slots a follow-up inherited from the previous turn (e.g. location from context). */
+  contextUsed?: string[];
 }
 
 export interface ChatMessage {

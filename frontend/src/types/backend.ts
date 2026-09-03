@@ -230,6 +230,8 @@ export interface BackendQueryResponse {
   evidence: BackendEvidence;
   pipeline: Record<string, unknown>;
   answer?: BackendAnswer | null;
+  /** U3: echoed conversation id for context continuity. */
+  session_id?: string | null;
 }
 
 export interface BackendHealth {

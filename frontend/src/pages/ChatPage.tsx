@@ -7,7 +7,7 @@ import { askWeatherGPT } from '../services/chatService';
 export const ChatPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const query = searchParams.get('q');
-  const { addMessage, currentLocation, preferences } = useWeatherStore();
+  const { addMessage, currentLocation, preferences, sessionId } = useWeatherStore();
   const handledRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -21,6 +21,8 @@ export const ChatPage: React.FC = () => {
       `${currentLocation.name}, ${currentLocation.state}`,
       preferences.language,
       preferences.demoMode,
+      undefined,
+      sessionId,
     )
       .then((res) => {
         addMessage({

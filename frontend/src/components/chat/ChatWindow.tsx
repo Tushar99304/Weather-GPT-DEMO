@@ -6,7 +6,8 @@ import { askWeatherGPT } from '../../services/chatService';
 import { Sparkles, Trash2, Bot } from 'lucide-react';
 
 export const ChatWindow: React.FC = () => {
-  const { messages, addMessage, clearChat, currentLocation, preferences } = useWeatherStore();
+  const { messages, addMessage, clearChat, currentLocation, preferences, sessionId } =
+    useWeatherStore();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isLoading, setIsLoading] = React.useState(false);
 
@@ -32,6 +33,8 @@ export const ChatWindow: React.FC = () => {
         `${currentLocation.name}, ${currentLocation.state}`,
         preferences.language,
         preferences.demoMode,
+        undefined,
+        sessionId,
       );
 
       addMessage({

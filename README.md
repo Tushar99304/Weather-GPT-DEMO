@@ -104,6 +104,7 @@ python -m pytest tests -v -k phase4    # Phase 4 (grounding checks + every LLM f
 python -m pytest tests -v -k phase5a   # Phase 5A (provider registry + model metadata), all offline
 python -m pytest tests -v -k u1        # U1 (instruction surfacing, precedence, hazard scenarios), offline
 python -m pytest tests -v -k u2        # U2 (integration additions: advisory activity, hourly, climate), offline
+python -m pytest tests -v -k u3        # U3 (conversation context + session isolation + sample-alert default), offline
 node scripts/check_frontend_render.mjs # 8 render cases for the REFERENCE page (frontend-old/), incl. U1 alert UX
 node scripts/check_frontend.mjs        # React/Vite gate: oxlint + tsc + vite build + 14 mapper tests (8 fixtures)
 node scripts/smoke_e2e.mjs             # integrated-app smoke (SPA serving, abstain/unavailable/activity/coords), offline
@@ -127,7 +128,8 @@ as a reference/fallback (served nowhere automatically; its offline render gate s
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/api/query` | `{ "message", "location_hint"?, "include_pipeline"?, "activity"?, "latitude"?, "longitude"? }` → status + Evidence (+trace) |
+| `POST` | `/api/query` | `{ "message", "location_hint"?, "include_pipeline"?, "activity"?, "latitude"?, "longitude"?, "session_id"? }` → status + Evidence (+trace). `session_id` enables conversational follow-ups (U3): "is it safe to travel?" after "...in Mumbai" reuses Mumbai; the LLM still sees only the Evidence object. |
+| `POST` | `/api/session/reset` | `{ "session_id" }` → forgets that conversation's structured context (new chat) |
 | `GET` | `/api/pipeline?message=&activity=&latitude=&longitude=` | same pipeline, GET form (easy curl/PowerShell/browser) |
 | `POST` | `/api/advisory` | deterministic sector advisory for a place/activity (same engine; `?activity=marine` etc.) |
 | `GET` | `/api/overview` | **additive** read-only current-conditions summary for the dashboard map |

@@ -45,6 +45,7 @@ from backend.models import (
 from backend.services import alerts as alerts_service
 from backend.services import advisory as advisory_service
 from backend.services import climate as climate_service
+from backend.services import context
 from backend.services import evidence as evidence_service
 from backend.services import geocoding, parsing, weather
 from backend.services import llm as llm_service
@@ -170,57 +171,117 @@ async def run_pipeline(
     location_hint: str | None = None,
     activity: str | None = None,
     coordinates: tuple[float, float] | None = None,
+    session_id: str | None = None,
 ) -> tuple[Evidence, Dict[str, Any]]:
-    """Shared by /api/query and the phase-1 test script, so tests exercise the real path."""
+    """Shared by /api/query and the phase-1 test script, so tests exercise the real path.
+
+    U3: ``session_id`` enables the controlled conversation-context layer. Context fills ONLY
+    the slots a new message leaves blank (location/timeframe/intent/activity) from the previous
+    *resolved* turn. It never injects raw history into the LLM — the model still receives exactly
+    one structured Evidence object. See backend/services/context.py.
+    """
     trace: Dict[str, Any] = {"stages": []}
 
     def stage(name: str, status: str, detail: Dict[str, Any]) -> None:
         trace["stages"].append({"stage": name, "status": status, **detail})
 
     parsed: ParsedQuery = parsing.parse(message, today=dt.date.today())
+
+    # ---- U3: conversation-context resolution (structured slots only, no raw history) ---- #
+    prior_ctx = context.STORE.get(session_id) if session_id else None
+    turn = context.resolve_turn(parsed, prior_ctx)
+    context_carried: Dict[str, str] = dict(turn.context_used)
+    # A remembered RESOLVED location lets us skip geocoding entirely for follow-ups ("there").
+    remembered_location = prior_ctx.location if (prior_ctx and turn.carried_location) else None
+    # An explicit activity on the request always wins; otherwise the prior topic carries over.
+    effective_activity = activity or (prior_ctx.activity if prior_ctx else None)
     stage(
         "parse",
-        "ok",
+        "clarify" if turn.needs_clarification else "ok",
         {
-            "intent": parsed.intent,
-            "intent_reason": parsed.intent_reason,
-            "location_text": parsed.location_text,
-            "timeframe": parsed.timeframe,
-            "timeframe_reason": parsed.timeframe_reason,
-            "notes": parsed.notes,
+            "intent": turn.parsed.intent,
+            "intent_reason": turn.parsed.intent_reason,
+            "location_text": turn.parsed.location_text,
+            "timeframe": turn.parsed.timeframe,
+            "timeframe_reason": turn.parsed.timeframe_reason,
+            "notes": turn.parsed.notes,
+            "session_id": session_id or None,
+            "context_used": context_carried,
+            "context_turn": prior_ctx.turn_count if prior_ctx else 0,
         },
     )
+    parsed = turn.parsed
+
+    # A reference with no antecedent (e.g. "Is it safe to travel?" as the very first message):
+    # ask instead of guessing a location. No weather is retrieved on this path.
+    if turn.needs_clarification and remembered_location is None and coordinates is None \
+            and _coords_from_hint(location_hint) is None:
+        ev = Evidence(
+            status="clarify",
+            request={"message": message, "intent": parsed.intent, "timeframe": parsed.timeframe},
+            clarification=turn.clarification,
+            evidence_quality="LOW",
+            validation={"sufficient": False, "location_resolved": False,
+                        "failures": ["missing_location"]},
+        )
+        ev.quality_breakdown = {"reason": "follow-up reference had no prior location in this session"}
+        trace["conversation"] = {"session_id": session_id or None, "context_used": context_carried,
+                                 "clarified": True}
+        stage("abstain_or_clarify", "clarify", {"why": "missing_location_no_context"})
+        return ev, trace
 
     # ADDITIVE: browser geolocation coordinates are honoured only when the message names no
     # place. A typed place always goes through the normal geocoder (no coordinates spoofing).
-    coords = _coords_from_hint(location_hint) or coordinates
-    if coords is not None and not parsed.location_text:
+    # U3: a follow-up that reuses a remembered, already-resolved place ("there", "is it safe?")
+    # skips geocoding entirely — we answer for the identical coordinates we verified last turn.
+    if remembered_location is not None:
         geo = GeocodeResult(
             status="ok",
-            query="device location",
-            location=ResolvedLocation(
-                name="Your current location",
-                latitude=coords[0],
-                longitude=coords[1],
-                resolution_note="resolved from browser geolocation coordinates (no place name in the query)",
-            ),
+            query=remembered_location.name,
+            location=remembered_location,
             clarification=None,
         )
-        stage("geocode", "ok", {"query": "device location", "location": geo.location.model_dump(),
-                                "candidates": [], "clarification": None, "gap": None})
-    else:
-        geo = await geocoding.resolve(parsed.location_text, context=location_hint)
         stage(
             "geocode",
-            geo.status,
+            "ok",
             {
-                "query": geo.query,
-                "location": geo.location.model_dump() if geo.location else None,
-                "candidates": [c.model_dump() for c in geo.candidates],
-                "clarification": geo.clarification,
-                "gap": geo.evidence_gap,
+                "query": remembered_location.name,
+                "location": remembered_location.model_dump(),
+                "candidates": [],
+                "clarification": None,
+                "gap": None,
+                "reused_from_conversation": True,
             },
         )
+    else:
+        coords = _coords_from_hint(location_hint) or coordinates
+        if coords is not None and not parsed.location_text:
+            geo = GeocodeResult(
+                status="ok",
+                query="device location",
+                location=ResolvedLocation(
+                    name="Your current location",
+                    latitude=coords[0],
+                    longitude=coords[1],
+                    resolution_note="resolved from browser geolocation coordinates (no place name in the query)",
+                ),
+                clarification=None,
+            )
+            stage("geocode", "ok", {"query": "device location", "location": geo.location.model_dump(),
+                                    "candidates": [], "clarification": None, "gap": None})
+        else:
+            geo = await geocoding.resolve(parsed.location_text, context=location_hint)
+            stage(
+                "geocode",
+                geo.status,
+                {
+                    "query": geo.query,
+                    "location": geo.location.model_dump() if geo.location else None,
+                    "candidates": [c.model_dump() for c in geo.candidates],
+                    "clarification": geo.clarification,
+                    "gap": geo.evidence_gap,
+                },
+            )
 
     # ---- short-circuit: clarify / unresolved, with NO weather retrieved ---- #
     if geo.status == "ambiguous":
@@ -268,6 +329,27 @@ async def run_pipeline(
         return ev, trace
 
     loc = geo.location
+
+    # ---- U3: remember this turn's RESOLVED slots for the next message in THIS session ---- #
+    # Only the small structured context is stored (place + coords + timeframe + intent +
+    # activity). Raw chat text is never stored and never reaches the LLM. A turn that failed to
+    # geocode never reaches here, so memory only ever contains verified places.
+    if session_id:
+        context.STORE.put(
+            session_id,
+            location_text=parsed.location_text or loc.name,
+            location=loc,
+            timeframe=parsed.timeframe,
+            target_date=parsed.target_date,
+            intent=parsed.intent if parsed.intent != "clarification_needed" else None,
+            activity=effective_activity,
+        )
+        trace["conversation"] = {
+            "session_id": session_id,
+            "context_used": context_carried,
+            "remembered": {"location": loc.name, "timeframe": parsed.timeframe,
+                           "intent": parsed.intent, "activity": effective_activity},
+        }
 
     # ---- retrieve live evidence (weather + official alerts, concurrently) ---- #
     # Concurrent on purpose: the SACHET round-trips must not add latency to the demo, and a
@@ -410,7 +492,7 @@ async def run_pipeline(
         },
     )
 
-    ev.advisory = advisory_service.advise(ev, activity=activity)
+    ev.advisory = advisory_service.advise(ev, activity=effective_activity)
     ev.risk = ev.advisory.risk_level
     # Post-advise integrity gate: the advisory may only cite alerts that are actually in the
     # evidence. Same function Phase 4's grounding verifier will run on the LLM's answer.
@@ -494,6 +576,7 @@ async def query(req: QueryRequest) -> QueryResponse:
         location_hint=req.location_hint,
         activity=req.activity,
         coordinates=coords,
+        session_id=req.session_id,
     )
     return QueryResponse(
         status=ev.status,  # type: ignore[arg-type]
@@ -503,7 +586,19 @@ async def query(req: QueryRequest) -> QueryResponse:
         # The answer travels alongside the evidence, not inside it: `evidence` stays the object the
         # LLM was given, so a reviewer can re-run the verifier on the reply and agree with it.
         answer=trace.get("answer"),
+        # U3: echo the session id so a stateless client can keep the conversation continuity.
+        session_id=req.session_id,
     )
+
+
+@app.post("/api/session/reset")
+async def session_reset(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """U3: forget a conversation's context (new chat / 'clear'). The client calls this when the
+    user starts a fresh conversation so no prior location/topic leaks into it."""
+    sid = (payload or {}).get("session_id")
+    if sid:
+        context.STORE.clear(str(sid))
+    return {"ok": True, "session_id": sid, "context_cleared": True}
 
 
 @app.get("/api/pipeline")
@@ -513,10 +608,14 @@ async def pipeline_get(
     activity: str | None = None,
     latitude: float | None = None,
     longitude: float | None = None,
+    session_id: str | None = None,
 ) -> Dict[str, Any]:
     """GET twin of /api/query — convenient for curl/PowerShell during the sprint."""
     coords = (latitude, longitude) if (latitude is not None and longitude is not None) else None
-    ev, trace = await run_pipeline(message, location_hint=location_hint, activity=activity, coordinates=coords)
+    ev, trace = await run_pipeline(
+        message, location_hint=location_hint, activity=activity, coordinates=coords,
+        session_id=session_id,
+    )
     return {"status": ev.status, "evidence": ev.model_dump(), "pipeline": trace}
 
 

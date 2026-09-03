@@ -414,6 +414,8 @@ class QueryResponse(BaseModel):
     status: Literal["grounded", "abstain", "clarify", "error"]
     user_message: str
     evidence: Evidence
+    # U3: echoed session id for conversation continuity (None if the client sent none).
+    session_id: Optional[str] = None
     pipeline: Dict[str, Any] = Field(default_factory=dict)
     # Phase 4: the phrased answer. Optional on purpose — when the LLM is unconfigured or the guard
     # rejects it, `answer` carries the deterministic fallback, and the Evidence object below stays

@@ -10,11 +10,70 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-from typing import Optional
+from typing import Dict, Optional
 
 from backend.models import ParsedQuery, Timeframe
 
-# --- timeframe patterns (order matters: more specific first) --------------- #
+# --- U3 multilingual (Hindi / Marathi / Hinglish) query understanding -------- #
+# These patterns ONLY extract intent/timeframe/location slots. They never produce weather
+# values — the evidence pipeline still retrieves every number. Devanagari range is
+# \u0900-\u097F; common Latin-script Hinglish spellings are included too.
+#
+# timeframe words (order matters: more specific first)
+TIMEFRAME_PATTERNS_MULTILINGUAL: list[tuple[str, Timeframe, str]] = [
+    # tomorrow: "kal" (Hindi/Marathi, in a forward-looking phrase), "उद्या" (Marathi),
+    # "आने वाला कल". NOTE: bare "kal" is ambiguous in Hindi (yesterday/tomorrow); in a forward
+    # question ("...baarish hogi kya?" = future tense) it reads as tomorrow, which is the
+    # common forecast case we support. Past-tense "bita kal" is caught by the past rule, but
+    # future is checked first here.
+    (r"\bउद्या\b|\bउद्य\b|\bआने\s+वाला?\s+कल\b|\btomorrow\b|\btmrw\b|\bकल\b(?![^।]*(?:बीता|गेल्या|थी|था))|\bkal\b",
+     "tomorrow", "matched tomorrow keyword (Hindi/Marathi/Hinglish)"),
+    # today: "aaj", "आज", "आजच्या"
+    (r"\bआज(?:च्या|चा|चे)?\b|\b(?:today|aaj|aj)\b",
+     "today", "matched today keyword (Hindi/Marathi/Hinglish)"),
+    # now: "अभी", "आत्ता", "right now"
+    (r"\bअभी\b|\bआत्ता\b|\bआता\b|\b(?:abhi|atta|atta)\b",
+     "now", "matched now keyword (Hindi/Marathi/Hinglish)"),
+    # yesterday / past: "बीता कल" (Hindi), "गेल्या/काल" (Marathi yesterday), "yesterday".
+    # The forward "कल" (Hindi tomorrow) is handled by the tomorrow rule above, not here.
+    (r"\bबीता\s+कल\b|\bगेल्या\b|\bकाल\b|\byesterday\b|\bbita\s+kal\b|\bbeeta\s+kal\b",
+     "past", "matched past keyword (Hindi/Marathi/Hinglish)"),
+]
+
+# Precipitation / rain vocabulary in Hindi/Marathi/Hinglish, for intent classification.
+RAIN_MULTILINGUAL_RE = re.compile(
+    r"बारिश|बरसात|पाऊस|पावसाळा|पडेल|पडतोय|पडणार|होगी|होईल|"
+    r"\bbaarish\b|\bbarsaat\b|\bpaus\b|\bpavsala\b|\bpadel\b|\bhogi\b|\bhoil\b",
+    re.IGNORECASE,
+)
+
+# Weather / "mausam/havaamaan" vocabulary.
+WEATHER_MULTILINGUAL_RE = re.compile(
+    r"मौसम|हवामान|तापमान|मौसाम|"
+    r"\bmausam\b|\bmausam\b|\bhavaamaan\b|\bhava man\b|\btapmaan\b|\btemp\b",
+    re.IGNORECASE,
+)
+
+# Safety/travel vocabulary ("is it safe to go / travel") in Hinglish.
+SAFETY_MULTILINGUAL_RE = re.compile(
+    r"सुरक्षित|जाऊ\s*शकतो|जा\s*सकते|सफर|यात्रा|"
+    r"\bsurakshit\b|\bsafe\b|\bja\s*sakat\b|\bsafar\b|\byatra\b|\bjana\b|\bchalein\b",
+    re.IGNORECASE,
+)
+
+# Alert/warning vocabulary in Hindi/Marathi.
+ALERT_MULTILINGUAL_RE = re.compile(
+    r"चेतावनी|अलर्ट|इशारा|अॅलर्ट|"
+    r"\bchetavani\b|\balert\b|\bwarning\b",
+    re.IGNORECASE,
+)
+
+
+def _has_devanagari(text: str) -> bool:
+    return bool(re.search(r"[\u0900-\u097F]", text))
+
+
+# --- English timeframe patterns (order matters: more specific first) -------- #
 TIMEFRAME_PATTERNS: list[tuple[str, Timeframe, str]] = [
     (r"\bright now\b|\bcurrently\b|\bnow\b|\bat the moment\b|\bpresent\b", "now", "matched now-keywords"),
     (r"\btomorrow\b|\btmrw\b|\bnext morning\b", "tomorrow", "matched tomorrow-keywords"),
@@ -31,20 +90,117 @@ DATE_IN_TEXT = re.compile(r"\b(20\d{2}-\d{2}-\d{2})\b")
 
 # --- location patterns ------------------------------------------------------ #
 LOCATION_PATTERNS = [
-    re.compile(r"\b(?:in|at|for|near|around|over|to)\s+([a-z\u0900-\u097F][a-z0-9\u0900-\u097F'.,\s-]{1,50}?)"
-               r"\s+(?:right now|currently|tomorrow|today|tonight|this evening|this morning|now|[?.!])", re.I),
+    # U3 (highest priority): "what/how about <place>" and "<place> <postposition>" in
+    # Hindi/Marathi/Hinglish. These are checked BEFORE the generic English preposition rule so
+    # a tight, specific match wins over a loose "to <verb>" capture ("safe to travel in Mumbai").
+    re.compile(r"\b(?:what|how)\s+about\s+([a-z\u0900-\u097F][a-z0-9\u0900-\u097F'.,\s-]{1,50}?)\s*(?:[?.!]|$)",
+               re.I),
+    re.compile(r"\b([a-z][a-z0-9.'\s-]{1,40}?)\s+(?:mein|mei|men|mai|madhe|madhye|me|ka|ki|ke|chya|cha|che)\b",
+               re.I),
+    re.compile(r"([\u0900-\u097F]{2,20}?)(?:त|मध्ये|चे|चा|च्या|ला|मधले|मधला)(?![\u0900-\u097F])"),
+    re.compile(r"([\u0900-\u097F]{2,20})\s+में(?![\u0900-\u097F])"),
+    re.compile(r"\b(?:in|at|for|near|around|over)\s+([a-z\u0900-\u097F][a-z0-9\u0900-\u097F'.,\s-]{1,50}?)"
+               r"\s*(?:right now|currently|tomorrow|today|tonight|this evening|this morning|now|[?.!]|$)", re.I),
+    # "travel/go/commute/move/head TO <place>" — the place follows the travel verb + "to".
+    re.compile(r"\b(?:travel|go|going|commute|commuting|drive|driving|head|heading|move|moving|fly|flying|trip to)\s+to\s+"
+               r"([a-z][a-z0-9'.,\s-]{1,50}?)\s*(?:right now|currently|tomorrow|today|tonight|tomorrow|[?.!]|$)",
+               re.I),
     re.compile(r"\bweather (?:in|at|for|of)\s+([a-z\u0900-\u097F][a-z0-9\u0900-\u097F'.,\s-]{1,50}?)"
-               r"\s*(?:tomorrow|today|right now|currently|this week|\?|$)", re.I),
+               r"\s*(?:tomorrow|today|right now|currently|this week|[?.!]|$)", re.I),
     re.compile(r"\ballert[s]? (?:in|for|at|issued for)\s+([a-z\u0900-\u097F][a-z0-9\u0900-\u097F'.,\s-]{1,50}?)"
-               r"\s*(?:today|right now|now|\?|$)", re.I),
+               r"\s*(?:today|right now|now|[?.!]|$)", re.I),
     re.compile(r"\b(?:rain|raining|snow|temperature|heat|humidity|wind) (?:in|at|for)\s+"
-               r"([a-z\u0900-\u097F][a-z0-9\u0900-\u097F'.,\s-]{1,50}?)(?:\s|,|\?|$)", re.I),
+               r"([a-z\u0900-\u097F][a-z0-9\u0900-\u097F'.,\s-]{1,50}?)\s*(?:,|[?.!]|$)", re.I),
 ]
 
 FILLER = re.compile(
     r"\b(any|an?|the|weather|forecast|conditions?|please|tell me|what'?s|what is|how is|is there|do you know)\b",
     re.I,
 )
+
+# Lead-in words that a multilingual capture can pick up BEFORE the real place; stripped from
+# the front of a captured phrase. (Hinglish "kal"=tomorrow/yesterday, "aaj"=today, "kya"=what.)
+_LEAD_IN = re.compile(
+    r"^\s*(?:what|how|about|and|is|are|will|should|can|kya|kyaa|kal|aaj|aj|abhi|उद्या|आज|कल|क्या|बारिश|पाऊस|मौसम|हवामान|में|मे|के|का|की)\b\s*",
+    re.IGNORECASE,
+)
+
+# Common Indian place names written in Devanagari/Hinglish -> the Latin name the geocoder
+# indexes. Query understanding only: this maps a SCRIPT/ALIAS, it never invents a location.
+_PLACE_ALIASES: Dict[str, str] = {
+    # Devanagari -> Latin
+    "मुंबई": "Mumbai", "मुम्बई": "Mumbai", "मुंबईचे": "Mumbai", "पुणे": "Pune",
+    "पुण्या": "Pune", "पुण्याचे": "Pune", "दिल्ली": "Delhi", "दिल्लीत": "Delhi",
+    "मुंबईत": "Mumbai", "पुण्यात": "Pune",
+    "नवी दिल्ली": "New Delhi", "नई दिल्ली": "New Delhi", "बेंगळुरू": "Bengaluru",
+    "बेंगलोर": "Bengaluru", "बंगलोर": "Bengaluru", "कोलकाता": "Kolkata",
+    "चेन्नई": "Chennai", "हैदराबाद": "Hyderabad", "अहमदाबाद": "Ahmedabad",
+    "नागपुर": "Nagpur", "जयपुर": "Jaipur", "लखनऊ": "Lucknow", "सूरत": "Surat",
+    "भोपाल": "Bhopal", "इंदौर": "Indore", "पटना": "Patna", "चंडीगढ़": "Chandigarh",
+    "मणाली": "Manali", "गोवा": "Goa", "नासिक": "Nashik", "नाशिक": "Nashik",
+    "ठाणे": "Thane", "थाणे": "Thane", "शिमला": "Shimla", "ऋषिकेश": "Rishikesh",
+    "वाराणसी": "Varanasi", "केरळ": "Kerala", "केरल": "Kerala", "महाराष्ट्र": "Maharashtra",
+    "गुजरात": "Gujarat", "राजस्थान": "Rajasthan", "पंजाब": "Punjab",
+    # Hinglish Latin spellings -> canonical
+    "mumbai": "Mumbai", "bombay": "Mumbai", "pune": "Pune", "poona": "Pune",
+    "delhi": "Delhi", "nayi dilli": "New Delhi", "bangalore": "Bengaluru",
+    "bengaluru": "Bengaluru", "calcutta": "Kolkata", "kolkata": "Kolkata",
+    "madras": "Chennai", "chennai": "Chennai", "hyderabad": "Hyderabad",
+    "ahmedabad": "Ahmedabad", "nagpur": "Nagpur", "jaipur": "Jaipur",
+}
+
+
+def _normalize_place(raw: str) -> Optional[str]:
+    """Strip lead-ins/filler and map a Devanagari/Hinglish place to its canonical Latin name.
+    Returns None if nothing place-like remains (caller then treats it as 'no location')."""
+    s = raw.strip(" .,?'\"")
+    # Repeatedly peel lead-in words (handles "kya kal mumbai ...").
+    for _ in range(4):
+        new = _LEAD_IN.sub("", s).strip(" .,?'\"")
+        if new == s:
+            break
+        s = new
+    s = FILLER.sub(" ", s)
+    # Time/date words are NOT places ("what about tomorrow?" must not yield location=tomorrow).
+    s = re.sub(
+        r"\b(tomorrow|tmrw|today|tonight|right now|currently|now|yesterday|this week|next week)\b",
+        " ", s, flags=re.I,
+    )
+    s = re.sub(r"(कल|उद्या|आज|अभी|बीता\s+कल)", " ", s)
+    s = re.sub(r"\s{2,}", " ", s).strip(" .,?'\"")
+    if not s:
+        return None
+    # Direct alias (whole phrase, case-insensitive for Latin).
+    key = s.strip()
+    if key in _PLACE_ALIASES:
+        return _PLACE_ALIASES[key]
+    low = key.lower()
+    if low in _PLACE_ALIASES:
+        return _PLACE_ALIASES[low]
+    # A loose preposition capture can grab a verb/activity ("safe to travel"). These are never
+    # place names — reject so a later, tighter pattern can win (and we never geocode a verb).
+    _NON_PLACE = {
+        "travel", "go", "going", "commute", "commuting", "drive", "driving", "walk", "walk",
+        "safe", "rain", "rainfall", "raining", "snow", "wind", "weather", "forecast", "alert",
+        "alerts", "trip", "fishing", "marine", "it", "me", "us", "tomorrow", "today", "now",
+        "there", "here", "out", "outside", "home", "work",
+    }
+    if low in _NON_PLACE:
+        return None
+    # If the phrase ENDS in a trailing non-place token from a loose capture ("travel in Mumbai"
+    # is already handled by tighter patterns), guard the first token too.
+    first = low.split()[0] if low.split() else ""
+    if first in _NON_PLACE and len(low.split()) == 1:
+        return None
+    # If the phrase is entirely Devanagari and we don't have an alias, transliteration-free we
+    # cannot geocode reliably -> return None (clarify) rather than guess a wrong city.
+    if _has_devanagari(key) and not re.search(r"[A-Za-z]", key):
+        # Try a prefix match against known aliases (e.g. "मुंबईत" stem already suffix-stripped).
+        for dev, latin in _PLACE_ALIASES.items():
+            if key.startswith(dev) or dev.startswith(key):
+                return latin
+        return None
+    return s
 
 
 def extract_timeframe(text: str, today: Optional[dt.date] = None) -> tuple[Timeframe, str, Optional[str]]:
@@ -61,6 +217,10 @@ def extract_timeframe(text: str, today: Optional[dt.date] = None) -> tuple[Timef
     for pattern, label, reason in TIMEFRAME_PATTERNS:
         if re.search(pattern, t):
             return label, reason, None
+    # U3: Hindi/Marathi/Hinglish timeframe words ("kal", "aaj", "उद्या", "आज", ...).
+    for pattern, label, reason in TIMEFRAME_PATTERNS_MULTILINGUAL:
+        if re.search(pattern, t):
+            return label, reason, None
     return "unspecified", "no explicit timeframe word found", None
 
 
@@ -71,15 +231,17 @@ def extract_location(text: str) -> tuple[Optional[str], str]:
     # found by running the pipeline).
     text = DATE_IN_TEXT.sub(" ", text)
     text = re.sub(r"\b(?:on|of|for)?\s*\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?(?:\s+\d{4})?", "", text, flags=re.I)
+    # Try each pattern in priority order; the first whose capture normalises to a real place
+    # wins. A capture that reduces to nothing (e.g. only a timeframe word) is skipped, so we
+    # never return a non-place as a location.
     for i, pattern in enumerate(LOCATION_PATTERNS):
         m = pattern.search(text)
-        if m:
-            raw = m.group(1).strip(" .,?'\"")
-            cleaned = FILLER.sub(" ", raw)
-            cleaned = re.sub(r"\b(tomorrow|today|right now|currently|now|tonight)\b", "", cleaned, flags=re.I)
-            cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" .,?'\"")
-            if cleaned:
-                return cleaned, f"pattern#{i + 1} preposition/keyword capture"
+        if not m:
+            continue
+        raw = m.group(1).strip(" .,?'\"")
+        cleaned = _normalize_place(raw)
+        if cleaned:
+            return cleaned, f"pattern#{i + 1} preposition/keyword capture"
     return None, "no location pattern matched"
 
 
@@ -92,14 +254,15 @@ def classify_intent(
     keep this signature so nothing else changes.
     """
     t = text.lower()
-    if re.search(r"\balert[s]?\b|\bwarning[s]?\b|\bwatch\b|\balarm\b|\bSACHET\b|\bIMD warning\b", t):
-        return "official_alert", "matched alert/warning keywords"
+    if re.search(r"\balert[s]?\b|\bwarning[s]?\b|\bwatch\b|\balarm\b|\bSACHET\b|\bIMD warning\b", t) \
+            or ALERT_MULTILINGUAL_RE.search(text):
+        return "official_alert", "matched alert/warning keywords (incl. Hindi/Marathi)"
     if re.search(
         r"\bsafe\b|\bshould i\b|\bcan i\b|\brisk\b|\btravel\b|\bcommut\w*\b|\bdrive\b|\bouting\b"
         r"\bflights?\b|\bplan(e|es)? a\b|\bcancel\w*\b|\bpickleball\b|\bmarathon\b|\boutdoor\b",
         t,
-    ):
-        return "advisory_risk", "matched travel/safety/activity keywords"
+    ) or SAFETY_MULTILINGUAL_RE.search(text):
+        return "advisory_risk", "matched travel/safety/activity keywords (incl. Hindi/Marathi)"
     # An explicit PAST date is a historical question even if the wording says "weather in".
     is_past_date = False
     if target_date:
@@ -113,8 +276,8 @@ def classify_intent(
         return "historical_climate", "matched historical/climate keywords or past timeframe"
     if re.search(r"\?.*$", t) or re.search(
         r"\bweather\b|\bforecast\b|\btemperature\b|\brain\b|\bsnow\b|\bwind\b|\bhumid\w*\b", t
-    ):
-        return "forecast_current", "matched weather/forecast vocabulary"
+    ) or RAIN_MULTILINGUAL_RE.search(text) or WEATHER_MULTILINGUAL_RE.search(text):
+        return "forecast_current", "matched weather/forecast vocabulary (incl. Hindi/Marathi)"
     return "clarification_needed", "no weather signal found in the message"
 
 

@@ -150,6 +150,23 @@ describe('mapAlerts / mapAdvisory direct contracts', () => {
     expect(e2.expired[0].validity).toBe('expired');
   });
 
+  it('fixture_replay alerts are badged SAMPLE and never presented as live official', () => {
+    const ev = fx('alert_active').evidence;
+    // Simulate the backend replaying ALERT_FIXTURE_RSS (mode flips to fixture_replay).
+    const fixtureEv = {
+      ...ev,
+      alerts: { ...ev.alerts, mode: 'fixture_replay' as const },
+    };
+    const { active } = mapAlerts(fixtureEv);
+    expect(active[0].isSample).toBe(true);
+    expect(active[0].isOfficial).toBe(false);
+    expect(active[0].source).toContain('SAMPLE FIXTURE');
+    expect(active[0].title).toContain('[SAMPLE FIXTURE]');
+    // live mode is NOT badged
+    const live = mapAlerts(ev).active[0];
+    expect(live.isSample).toBeFalsy();
+  });
+
   it('advisory maps headline/factors/rules and official-warning flag', () => {
     const adv = mapAdvisory(fx('alert_active').evidence.advisory ?? null, 'Pune, Maharashtra');
     expect(adv?.riskLevel).toBe('HIGH');

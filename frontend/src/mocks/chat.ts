@@ -2,70 +2,13 @@ import type { ChatMessage } from '../types';
 
 export const INITIAL_CHAT_MESSAGES: ChatMessage[] = [
   {
-    id: 'msg-1',
+    // FRESH START: a greeting only — no seeded conversation, no evidence, and crucially NO
+    // alert. A fake/official-looking alert must never appear on startup. Real answers (and any
+    // real official SACHET alert) arrive from the backend only after the user asks a question.
+    id: 'msg-welcome',
     sender: 'assistant',
-    text: 'Namaste! I am WeatherGPT, your grounded weather intelligence assistant. Ask me about live weather, official NDMA/SACHET alerts, travel risks, or agricultural forecasts in English, Hindi, or Hinglish.',
-    timestamp: '10:30 AM',
-  },
-  {
-    id: 'msg-2',
-    sender: 'user',
-    text: 'Kal Mumbai mein baarish hogi kya?',
-    timestamp: '10:31 AM',
-    language: 'Hinglish',
-  },
-  {
-    id: 'msg-3',
-    sender: 'assistant',
-    text: 'Haan, kal Mumbai mein heavy rainfall hone ki high probability hai. SAMPLE demo alert (not real) issue kiya gaya hai, especially afternoon high tide ke waqt intense spell expected hai.',
-    timestamp: '10:31 AM',
-    queryAnalysis: {
-      intent: 'Forecast',
-      location: 'Mumbai, Maharashtra',
-      timeframe: 'Tomorrow (2026-09-03)',
-      language: 'Hinglish',
-      dataSourcesUsed: ['SAMPLE DATA'],
-      validationStatus: 'SAMPLE_DATA',
-    },
-    evidence: {
-      source: 'SAMPLE DATA',
-      authority: 'sample',
-    sourcePriority: 'SAMPLE',
-      location: 'Mumbai, Maharashtra',
-      observedAt: '10:30 AM IST',
-      validFrom: '2026-09-03 00:00',
-      validUntil: '2026-09-03 23:59',
-      temperature: 31,
-      feelsLike: 34,
-      humidity: 84,
-      rainfall: 35.0,
-      windSpeed: 26,
-      pressure: 1006,
-      uvIndex: 4,
-      visibility: 4.0,
-      rainProbability: 78,
-      warningsCount: 1,
-      evidenceQuality: 'HIGH',
-      conditionText: 'SAMPLE heavy rainfall demo condition',
-      conditionCode: 'RAIN_HEAVY',
-    },
-    activeAlert: {
-      id: 'alert-mum-01',
-      title: 'SAMPLE: Heavy Rainfall Warning (demo data)',
-      severity: 'WARNING',
-      affectedArea: 'Mumbai City & Suburban',
-      locationId: 'mumbai',
-      issueTime: 'Today 08:30 AM IST',
-      expiryTime: 'Tomorrow 08:30 AM IST',
-      source: 'SAMPLE DATA',
-      officialMessage: 'Heavy to very heavy rainfall very likely at isolated places.',
-      weatherEvidenceSummary: 'Expected rainfall: 64.5mm - 115.5mm. High tide 4.2m at 1:45 PM.',
-      recommendedActions: [
-        'Avoid waterlogged low-lying areas.',
-        'Check train status before traveling.',
-      ],
-      isOfficial: true,
-    },
+    text: 'Namaste! I am WeatherGPT, your grounded weather intelligence assistant. Ask about live weather, official NDMA/SACHET alerts, or travel safety for a city or district — in English, Hindi, Hinglish or Marathi. For example: “Is it safe to travel in Mumbai?” and then just “What about tomorrow?”.',
+    timestamp: '',
   },
 ];
 

@@ -65,6 +65,8 @@ export interface QueryParams {
   latitude?: number;
   longitude?: number;
   includePipeline?: boolean;
+  /** U3: conversation id for context continuity (follow-ups without repeating the place). */
+  sessionId?: string;
 }
 
 /** POST /api/query — the full grounded pipeline (chat, dashboard, advisory, alerts). */
@@ -78,8 +80,61 @@ export function queryBackend(params: QueryParams): Promise<BackendQueryResponse>
       latitude: params.latitude,
       longitude: params.longitude,
       include_pipeline: params.includePipeline ?? false,
+      session_id: params.sessionId,
     }),
   });
+}
+
+/** POST /api/session/reset — forget a conversation's context (new chat / clear). */
+export function resetSession(sessionId: string): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>('/api/session/reset', {
+    method: 'POST',
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+}
+
+/**
+ * Mint a stable per-conversation id (persisted across reloads). The backend keeps only a small
+ * structured context keyed by this id; an id is opaque so one tab cannot read another's context.
+ */
+const SESSION_KEY = 'weathergpt.session_id';
+export function getSessionId(): string {
+  try {
+    let id = localStorage.getItem(SESSION_KEY);
+    if (!id) {
+      id =
+        (globalThis.crypto?.randomUUID?.() as string | undefined) ??
+        `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+      localStorage.setItem(SESSION_KEY, id);
+    }
+    return id;
+  } catch {
+    // SSR / storage disabled: a per-process fallback still keeps continuity within the tab.
+    if (!FALLBACK_ID) {
+      FALLBACK_ID = `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    }
+    return FALLBACK_ID;
+  }
+}
+let FALLBACK_ID: string | null = null;
+
+/** Start a fresh conversation: rotate the id and ask the backend to forget the old context. */
+export async function newSessionId(): Promise<string> {
+  const old = getSessionId();
+  try {
+    await resetSession(old).catch(() => undefined);
+  } catch {
+    /* network may be offline; local rotation still prevents stale UI context */
+  }
+  const id =
+    (globalThis.crypto?.randomUUID?.() as string | undefined) ??
+    `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  try {
+    localStorage.setItem(SESSION_KEY, id);
+  } catch {
+    FALLBACK_ID = id;
+  }
+  return id;
 }
 
 /** GET /health — secret-free provider/LLM/alert configuration for connection status. */

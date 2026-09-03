@@ -232,14 +232,29 @@ export function mapAlerts(ev: BackendEvidence): {
   expired: WeatherAlert[];
 } {
   const loc = ev.location ? { lat: ev.location.latitude, lng: ev.location.longitude } : undefined;
+  // Fixture replay (ALERT_FIXTURE_RSS) is a recorded SAMPLE for testing, never a live official
+  // pull: badge every mapped alert so the UI cannot present it as a current official alert.
+  const isFixture = ev.alerts?.mode === 'fixture_replay';
+  const tagFixture = (alert: WeatherAlert): WeatherAlert =>
+    isFixture
+      ? {
+          ...alert,
+          isSample: true,
+          isOfficial: false,
+          source: 'SAMPLE FIXTURE (ALERT_FIXTURE_RSS)',
+          title: `[SAMPLE FIXTURE] ${alert.title}`,
+        }
+      : alert;
   const active = (ev.alerts?.items ?? [])
     .filter((a) => a.validity === 'active')
-    .map((a) => mapAlert(a, loc));
+    .map((a) => tagFixture(mapAlert(a, loc)));
   // Expired alerts are surfaced ONLY in a labelled transparency section — never as active.
   const expired = [
     ...(ev.alerts?.recent_expired ?? []),
     ...(ev.alerts?.items ?? []).filter((a) => a.validity === 'expired'),
-  ].map((a) => mapAlert(a, loc));
+  ]
+    .map((a) => mapAlert(a, loc))
+    .map(tagFixture);
   return { active, expired };
 }
 
@@ -291,9 +306,19 @@ export function mapQueryAnalysis(
   ev: BackendEvidence,
   userText: string,
   answer?: BackendAnswer | null,
+  pipeline?: Record<string, unknown> | null,
 ): QueryAnalysis {
   const sources = (ev.sources ?? []).map(sourceAuthorityLabel);
   const timeframe = String(ev.request?.timeframe ?? 'now');
+  // U3: which slots a follow-up inherited from the previous turn (for the "how understood" UI).
+  const conv = (pipeline?.conversation ?? null) as
+    | { context_used?: Record<string, string> }
+    | null;
+  const contextUsed = conv?.context_used
+    ? Object.entries(conv.context_used)
+        .filter(([, from]) => from === 'context')
+        .map(([slot]) => slot)
+    : undefined;
   return {
     intent: mapIntent(ev),
     location: ev.location?.name ?? 'Unknown location',
@@ -304,6 +329,7 @@ export function mapQueryAnalysis(
     answerOrigin: answer?.origin,
     groundingVerified: answer?.grounding?.verified,
     groundingNote: answer?.grounding?.note || undefined,
+    contextUsed: contextUsed && contextUsed.length ? contextUsed : undefined,
   };
 }
 

@@ -93,18 +93,36 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
             )}
 
             {/* Official alerts take precedence and are surfaced first. */}
-            {(message.alerts && message.alerts.length > 0) || message.activeAlert ? (
+            {(() => {
+              const alertList =
+                message.alerts && message.alerts.length > 0
+                  ? message.alerts
+                  : message.activeAlert
+                  ? [message.activeAlert]
+                  : [];
+              if (!alertList.length) return null;
+              // A SAMPLE/fixture alert (demo mode, or backend ALERT_FIXTURE_RSS replay) must
+              // never be styled as a live official alert — it is test data, clearly badged.
+              const isSample = alertList.every((a) => a?.isSample);
+              return (
               <div className="space-y-2">
-                <div className="bg-red-50 border border-red-300 text-red-900 p-3 rounded-xl flex items-start gap-2 text-xs font-medium">
-                  <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <div
+                  className={`${
+                    isSample
+                      ? 'bg-amber-50 border-amber-300 text-amber-900'
+                      : 'bg-red-50 border-red-300 text-red-900'
+                  } border p-3 rounded-xl flex items-start gap-2 text-xs font-medium`}
+                >
+                  <AlertTriangle
+                    className={`w-4 h-4 ${isSample ? 'text-amber-600' : 'text-red-600'} shrink-0 mt-0.5`}
+                  />
                   <div>
-                    <strong className="block font-bold text-red-700">
-                      OFFICIAL NDMA / SACHET ALERT ACTIVE — outranks model weather
+                    <strong className={`block font-bold ${isSample ? 'text-amber-700' : 'text-red-700'}`}>
+                      {isSample
+                        ? 'SAMPLE / FIXTURE ALERT — recorded demo data, NOT a live official alert'
+                        : 'OFFICIAL NDMA / SACHET ALERT ACTIVE — outranks model weather'}
                     </strong>
-                    {(message.alerts && message.alerts.length > 0
-                      ? message.alerts
-                      : [message.activeAlert]
-                    )
+                    {alertList
                       .filter(Boolean)
                       .map((alert, i) => (
                         <span key={i} className="block mt-1">
@@ -119,7 +137,8 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message }) => {
                   </div>
                 </div>
               </div>
-            ) : null}
+              );
+            })()}
 
             {(message.status === 'abstain' || message.status === 'clarify') && (
               <div className="flex items-center gap-2 text-amber-800 text-xs font-bold">

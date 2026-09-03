@@ -61,6 +61,13 @@ export const QueryRoutingBreakdown: React.FC<QueryRoutingBreakdownProps> = ({ an
             </span>
           </div>
 
+          {analysis.contextUsed && analysis.contextUsed.length > 0 && (
+            <div className="text-[10px] text-[#2E7D5B] bg-[#E8F5EE] border border-[#BFE3D2] rounded-lg px-2 py-1">
+              Conversation context reused: <strong>{analysis.contextUsed.join(', ')}</strong> from your
+              previous message — you don’t need to repeat the city or day.
+            </div>
+          )}
+
           <div className="text-[10px] text-[#6B7D74] pt-1 border-t border-[#DCEAE2] mt-1">
             Answer origin: <strong>{analysis.answerOrigin === 'groq_llm' ? 'LLM (grounded & verified)' : analysis.answerOrigin === 'deterministic_fallback' ? 'Deterministic evidence-based fallback' : '—'}</strong>
             {analysis.groundingVerified != null && (

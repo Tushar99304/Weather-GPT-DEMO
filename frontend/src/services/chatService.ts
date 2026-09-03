@@ -92,6 +92,7 @@ export async function askWeatherGPT(
   language = 'en',
   useDemo = false,
   activity?: string,
+  sessionId?: string,
 ): Promise<AskQueryResponse> {
   if (useDemo) {
     return sampleResponse(userQuery, currentLocationName, language);
@@ -100,8 +101,12 @@ export async function askWeatherGPT(
   const res = await queryBackend({
     message: userQuery,
     // Only pass the location as a hint; the backend does its own geocoding and disambiguation.
+    // U3: sessionId lets the backend resolve follow-ups ("is it safe?", "what about tomorrow?")
+    // from the previous turn's structured context — the frontend sends no chat history.
     locationHint: currentLocationName,
     activity,
+    sessionId,
+    includePipeline: true, // needed to show which slots a follow-up inherited ("how understood")
   });
 
   const ev = res.evidence;
@@ -133,7 +138,7 @@ export async function askWeatherGPT(
 
   return {
     message: view.message,
-    queryAnalysis: mapQueryAnalysis(ev, userQuery, res.answer),
+    queryAnalysis: mapQueryAnalysis(ev, userQuery, res.answer, res.pipeline),
     evidence,
     activeAlert: active[0],
     alerts: active,

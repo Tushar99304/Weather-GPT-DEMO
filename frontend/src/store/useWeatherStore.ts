@@ -17,7 +17,7 @@ import { getCurrentWeather } from '../services/weatherService';
 import { getForecast } from '../services/forecastService';
 import { getActiveAlerts } from '../services/alertService';
 import { getAdvisoryForActivity } from '../services/advisoryService';
-import { fetchHealth } from '../services/backendClient';
+import { fetchHealth, getSessionId, newSessionId } from '../services/backendClient';
 import { getCachedData, setCachedData } from '../utils/cache';
 
 /**
@@ -71,6 +71,8 @@ interface WeatherStoreState {
   messages: ChatMessage[];
   addMessage: (msg: Omit<ChatMessage, 'id' | 'timestamp'>) => void;
   clearChat: () => void;
+  /** U3: opaque conversation id for backend context continuity (follow-ups). */
+  sessionId: string;
 
   selectedActivity: ActivityCategory;
   setSelectedActivity: (activity: ActivityCategory) => void;
@@ -120,6 +122,9 @@ export const useWeatherStore = create<WeatherStoreState>((set, get) => ({
   },
 
   messages: INITIAL_CHAT_MESSAGES,
+
+  // U3: stable per-conversation id; the backend keeps only a small structured context per id.
+  sessionId: getSessionId(),
 
   selectedActivity: 'Driving',
   activeEvidenceDrawer: null,
@@ -311,7 +316,19 @@ export const useWeatherStore = create<WeatherStoreState>((set, get) => ({
     set((state) => ({ messages: [...state.messages, newMsg] }));
   },
 
-  clearChat: () => set({ messages: INITIAL_CHAT_MESSAGES }),
+  // Clearing the chat starts a fresh conversation: reset the UI AND the backend's remembered
+  // context (rotate the session id + call /api/session/reset) so no prior location/topic leaks.
+  clearChat: () => {
+    const old = get().sessionId;
+    set({ messages: INITIAL_CHAT_MESSAGES });
+    void newSessionId()
+      .then((id) => set({ sessionId: id }))
+      .catch(() => undefined);
+    // Best-effort backend forget of the old id (network may be offline).
+    void import('../services/backendClient')
+      .then((m) => m.resetSession(old))
+      .catch(() => undefined);
+  },
 
   setSelectedActivity: (selectedActivity) => set({ selectedActivity }),
   setActiveEvidenceDrawer: (activeEvidenceDrawer) => set({ activeEvidenceDrawer }),
