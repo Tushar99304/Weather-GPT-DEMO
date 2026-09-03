@@ -98,6 +98,12 @@ export async function askWeatherGPT(
     return sampleResponse(userQuery, currentLocationName, language);
   }
 
+  // U4: the UI language ('en'|'hi'|'mr'|'hinglish') is the response language. It rides as
+  // structured request metadata; the backend puts it inside the Evidence so the answer text
+  // AND the spoken TTS voice follow the same choice. Unknown values default to English.
+  const answerLang =
+    language === 'hi' || language === 'mr' || language === 'hinglish' ? language : 'en';
+
   const res = await queryBackend({
     message: userQuery,
     // Only pass the location as a hint; the backend does its own geocoding and disambiguation.
@@ -105,6 +111,7 @@ export async function askWeatherGPT(
     // from the previous turn's structured context — the frontend sends no chat history.
     locationHint: currentLocationName,
     activity,
+    language: answerLang,
     // Conversational turn: use the shared session (the caller may pass it explicitly; default
     // to the shared id so Chat AND Voice always participate in the SAME conversation).
     sessionId: sessionId ?? getSessionId(),

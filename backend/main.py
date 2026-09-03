@@ -152,6 +152,17 @@ _COORDS_HINT = re.compile(
 )
 
 
+def _localized_clarification(lang: str | None) -> str:
+    """U4: conversational 'ask for a location' question in the user's response language."""
+    if lang == "hi":
+        return "कौन से शहर का मौसम जाँचूँ? कृपया शहर या ज़िले का नाम बताएँ।"
+    if lang == "mr":
+        return "कोणत्या शहराचे हवामान तपासू? कृपया शहर किंवा जिल्ह्याचे नाव सांगा."
+    if lang == "hinglish":
+        return "Kaun se sheher ka mausam check karun? Please ek city ya district ka naam do."
+    return "Which location should I check? Please give me a city or district name."
+
+
 def _coords_from_hint(location_hint: str | None) -> tuple[float, float] | None:
     """A browser geolocation fix is passed as 'lat,lon' (or 'lat lon'). Used ONLY when the
     message names no place; a place the user typed always wins over coordinates."""
@@ -173,6 +184,7 @@ async def run_pipeline(
     coordinates: tuple[float, float] | None = None,
     session_id: str | None = None,
     conversational: bool = True,
+    language: str | None = None,
 ) -> tuple[Evidence, Dict[str, Any]]:
     """Shared by /api/query and the phase-1 test script, so tests exercise the real path.
 
@@ -182,7 +194,14 @@ async def run_pipeline(
     injects raw history into the LLM — the model still receives exactly one structured Evidence
     object. Background UI data-sync calls pass ``conversational=False``: they neither read nor
     write session memory, so the active conversation is never disturbed. See context.py.
+
+    U4: ``language`` (the UI/voice-selected en/hi/mr/hinglish) sets the response language; if
+    absent it is auto-detected from the message. It is placed inside ``ev.request`` as
+    ``response_language`` (structured metadata, not a separate prompt), so the LLM/fallback
+    answers in that language and the frontend speaks it with the matching TTS voice.
     """
+    # The language choice applies to the raw message; an explicit UI choice wins over detection.
+    effective_language = parsing.detect_response_language(message, language)
     trace: Dict[str, Any] = {"stages": []}
 
     def stage(name: str, status: str, detail: Dict[str, Any]) -> None:
@@ -227,8 +246,10 @@ async def run_pipeline(
             and coordinates is None and _coords_from_hint(location_hint) is None:
         ev = Evidence(
             status="clarify",
-            request={"message": message, "intent": parsed.intent, "timeframe": parsed.timeframe},
-            clarification=turn.clarification,
+            request={"message": message, "intent": parsed.intent, "timeframe": parsed.timeframe,
+                     "topic": getattr(parsed, "topic", "other"),
+                     "response_language": effective_language},
+            clarification=_localized_clarification(effective_language),
             evidence_quality="LOW",
             validation={"sufficient": False, "location_resolved": False,
                         "failures": ["missing_location"]},
@@ -296,8 +317,10 @@ async def run_pipeline(
     if geo.status == "ambiguous":
         ev = Evidence(
             status="clarify",
-            request={"message": parsed.message, "intent": parsed.intent, "timeframe": parsed.timeframe},
-            clarification=geo.clarification or "Which location do you mean?",
+            request={"message": parsed.message, "intent": parsed.intent, "timeframe": parsed.timeframe,
+                     "topic": getattr(parsed, "topic", "other"),
+                     "response_language": effective_language},
+            clarification=geo.clarification or _localized_clarification(effective_language),
             evidence_quality="LOW",
             validation={"sufficient": False, "failures": ["ambiguous_location"]},
         )
@@ -310,9 +333,10 @@ async def run_pipeline(
         if geo.evidence_gap == "missing_location":
             ev = Evidence(
                 status="clarify",
-                request={"message": parsed.message, "intent": parsed.intent, "timeframe": parsed.timeframe},
-                clarification=geo.clarification
-                or "Which location should I check? Please give me a city or district name.",
+                request={"message": parsed.message, "intent": parsed.intent, "timeframe": parsed.timeframe,
+                         "topic": getattr(parsed, "topic", "other"),
+                         "response_language": effective_language},
+                clarification=geo.clarification or _localized_clarification(effective_language),
                 evidence_quality="LOW",
                 validation={"sufficient": False, "location_resolved": False, "failures": ["missing_location"]},
             )
@@ -321,7 +345,9 @@ async def run_pipeline(
             return ev, trace
         ev = Evidence(
             status="abstain",
-            request={"message": parsed.message, "intent": parsed.intent, "timeframe": parsed.timeframe},
+            request={"message": parsed.message, "intent": parsed.intent, "timeframe": parsed.timeframe,
+                     "topic": getattr(parsed, "topic", "other"),
+                     "response_language": effective_language},
             evidence_quality="LOW",
             abstain_reason=(
                 f"I couldn\u2019t verify a real location for \u201c{geo.query or 'that place'}\u201d, "
@@ -405,7 +431,8 @@ async def run_pipeline(
     if not alerts_error and alerts_result is not None and alerts_result.state == "unavailable":
         alerts_error = alerts_result.error or "SACHET unavailable"
 
-    ev = evidence_service.build_evidence(parsed, geo, bundle, alerts_result)
+    ev = evidence_service.build_evidence(parsed, geo, bundle, alerts_result,
+                                     response_language=effective_language)
     if weather_error:
         ev.status = "abstain"
         ev.abstain_reason = (
@@ -590,6 +617,7 @@ async def query(req: QueryRequest) -> QueryResponse:
         coordinates=coords,
         session_id=req.session_id,
         conversational=req.conversational,
+        language=req.language,
     )
     return QueryResponse(
         status=ev.status,  # type: ignore[arg-type]
@@ -623,12 +651,13 @@ async def pipeline_get(
     longitude: float | None = None,
     session_id: str | None = None,
     conversational: bool = True,
+    language: str | None = None,
 ) -> Dict[str, Any]:
     """GET twin of /api/query — convenient for curl/PowerShell during the sprint."""
     coords = (latitude, longitude) if (latitude is not None and longitude is not None) else None
     ev, trace = await run_pipeline(
         message, location_hint=location_hint, activity=activity, coordinates=coords,
-        session_id=session_id, conversational=conversational,
+        session_id=session_id, conversational=conversational, language=language,
     )
     return {"status": ev.status, "evidence": ev.model_dump(), "pipeline": trace}
 

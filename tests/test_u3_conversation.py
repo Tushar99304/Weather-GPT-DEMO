@@ -44,7 +44,7 @@ def _quiet_bundle():
     return _quiet_evidence().weather
 
 
-def _patch(monkeypatch, *, place="pune", alerts=None, weather_ok=True):
+def _patch(monkeypatch, *, place="pune", alerts=None, weather_ok=True, bundle=None):
     """Offline stub: geocode any known place, return a calm bundle, alerts pass-through."""
     from backend.services import alerts as alerts_service
     from backend.services import llm as L
@@ -62,7 +62,7 @@ def _patch(monkeypatch, *, place="pune", alerts=None, weather_ok=True):
             if not weather_ok:
                 from backend.services.http_client import UpstreamError
                 raise UpstreamError("open-meteo", "simulated failure")
-            return _quiet_bundle()
+            return bundle if bundle is not None else _quiet_bundle()
 
     async def fake_check_alerts(loc, **kw):
         return alerts if alerts is not None else _empty_alerts()
@@ -602,3 +602,173 @@ def test_u31_no_sample_alert_on_fresh_startup_backend(monkeypatch):
     assert r["evidence"]["alerts"]["state"] == "checked"
     assert r["evidence"]["alerts"]["items"] == []
     assert r["evidence"]["alerts"]["mode"] in ("live", "not_run")
+
+
+# =========================================================================== #
+# U4 — response language + topic-specific answers (both inside the one Evidence
+# object; the deterministic fallback must be topic- AND language-specific).
+# =========================================================================== #
+def _calm_evidence_with_rain():
+    """A grounded evidence bundle whose TOMORROW block has measurable rain (5 mm / 100%)."""
+    import datetime as dt
+    from backend.models import (ForecastDay, Source)
+    from backend.services import validation as V
+    from tests.test_u2_integration_additions import _quiet_evidence
+    ev = _quiet_evidence()  # calm, sufficient
+    local_now = dt.datetime.utcnow() + dt.timedelta(seconds=19800)
+    tomorrow = (local_now.date() + dt.timedelta(days=1)).isoformat()
+    ev.weather.tomorrow = ForecastDay(
+        date=tomorrow, label="Tomorrow",
+        temperature_min_c=22.0, temperature_max_c=30.0,
+        precipitation_sum_mm=5.0, precipitation_probability_max_pct=100,
+        wind_speed_max_kmh=12.0, weather_code=63, condition="Rain",
+    )
+    ev.request["timeframe"] = "tomorrow"
+    ev.sources.append(Source(name="Open-Meteo", type="forecast",
+                             timestamp=dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"))
+    ev.validation = V.validate_evidence(ev)
+    assert ev.validation.sufficient, ev.validation.failures
+    return ev
+
+
+def _set_topic_lang(ev, topic, lang):
+    ev.request["topic"] = topic
+    ev.request["response_language"] = lang
+    return ev
+
+
+def test_u4_topic_reaches_evidence_request():
+    """ParsedQuery.topic is carried into ev.request (structured metadata), not a separate prompt."""
+    ev, _trace = _run("will it rain in Mumbai tomorrow?")
+    assert ev.request["topic"] == "rain_prediction"
+    ev2, _trace = _run("should I carry an umbrella in Pune?")
+    assert ev2.request["topic"] == "umbrella_advice"
+    ev3, _trace = _run("is it safe to travel to Mumbai?")
+    assert ev3.request["topic"] == "travel_safety"
+    assert "response_language" in ev.request  # always present
+
+
+def test_u4_same_evidence_topic_responses_differ():
+    """The SAME evidence yields topic-specific answers (no identical template across topics)."""
+    from backend.services import llm as L
+    answers = {}
+    for topic in ("weather_summary", "rain_prediction", "umbrella_advice", "travel_safety"):
+        ev = _set_topic_lang(_calm_evidence_with_rain(), topic, "en")
+        answers[topic] = L.deterministic_payload(ev)["answer"]
+    assert len(set(answers.values())) == 4
+    # The rain answer mentions rain figures; umbrella answer advises on an umbrella; travel on risk.
+    assert "rain" in answers["rain_prediction"].lower() and ("5" in answers["rain_prediction"])
+    assert "umbrella" in answers["umbrella_advice"].lower()
+    assert "risk" in answers["travel_safety"].lower() or "safe" in answers["travel_safety"].lower()
+
+
+def test_u4_deterministic_fallback_is_topic_specific_and_grounded():
+    """Every topic×language fallback answer must pass grounding (no invented numbers)."""
+    from backend.services import llm as L
+    for lang in ("en", "hi", "mr", "hinglish"):
+        for topic in ("rain_prediction", "umbrella_advice", "travel_safety", "weather_summary", "temperature"):
+            ev = _set_topic_lang(_calm_evidence_with_rain(), topic, lang)
+            payload = L.deterministic_payload(ev)
+            report = L.grounding.verify(ev, payload)
+            assert report.verified, (lang, topic, report.failures)
+
+
+@pytest.mark.parametrize("lang,needle", [
+    ("hi", "बारिश"),
+    ("mr", "पाऊस"),
+    ("hinglish", "rain"),
+    ("en", "rain"),
+])
+def test_u4_response_language(lang, needle):
+    """The fallback answer body is in the requested language; numbers stay exact/grounded."""
+    from backend.services import llm as L
+    ev = _set_topic_lang(_calm_evidence_with_rain(), "rain_prediction", lang)
+    payload = L.deterministic_payload(ev)
+    assert needle in payload["answer"], (lang, payload["answer"])
+    assert L.grounding.verify(ev, payload).verified, (lang, L.grounding.verify(ev, payload).failures)
+
+
+def test_u4_hindi_travel_response_language():
+    from backend.services import llm as L
+    ev = _set_topic_lang(_calm_evidence_with_rain(), "travel_safety", "hi")
+    answer = L.deterministic_payload(ev)["answer"]
+    assert "यात्रा" in answer and "जोखिम" in answer
+    assert L.grounding.verify(ev, L.deterministic_payload(ev)).verified
+
+
+def test_u4_llm_still_receives_only_evidence(monkeypatch):
+    """Topic+language ride INSIDE ev.request; the LLM never gets raw history/messages as separate keys.
+
+    The deterministic fallback is used offline (no Groq key), so we assert directly on the
+    evidence object that explain() would receive: build_messages consumes only that object.
+    """
+    from backend.services import llm as L
+    ev = _set_topic_lang(_calm_evidence_with_rain(), "rain_prediction", "hi")
+    messages = L.build_messages(ev)
+    # Exactly one system + one user message, and the user message IS the evidence dump.
+    assert [m["role"] for m in messages] == ["system", "user"]
+    dump = messages[1]["content"]
+    import json as _json
+    parsed = _json.loads(dump)
+    assert parsed["request"]["topic"] == "rain_prediction"
+    assert parsed["request"]["response_language"] == "hi"
+    for forbidden in ("messages", "chat_history", "conversation", "history", "turns"):
+        assert forbidden not in parsed, forbidden
+
+
+def test_u4_language_passed_to_backend_and_echoed(monkeypatch):
+    """QueryRequest.language flows through and the response language is set inside evidence."""
+    _patch(monkeypatch)
+    c = _http(); sid = "u4-lang-meta"
+    r = c.post("/api/query", json={
+        "message": "will it rain in Mumbai tomorrow?", "session_id": sid,
+        "conversational": True, "language": "hi",
+    }).json()
+    assert r["evidence"]["request"]["response_language"] == "hi"
+
+
+def test_u4_auto_detect_language_from_message(monkeypatch):
+    """Without an explicit choice, the message script determines the response language."""
+    from backend.services import parsing
+    assert parsing.detect_response_language("क्या कल मुंबई में बारिश होगी?", None) == "hi"
+    assert parsing.detect_response_language("उद्या मुंबईत पाऊस पडेल का", None) == "mr"
+    assert parsing.detect_response_language("kal Mumbai mein baarish hogi kya?", None) == "hinglish"
+    assert parsing.detect_response_language("Will it rain in Mumbai tomorrow?", None) == "en"
+    # explicit choice always wins
+    assert parsing.detect_response_language("rain in Mumbai", "mr") == "mr"
+
+
+def test_u4_clarification_is_localized(monkeypatch):
+    """A first-turn follow-up with no location asks in the user's language."""
+    _patch(monkeypatch)
+    c = _http()
+    r = c.post("/api/query", json={
+        "message": "क्या यात्रा सुरक्षित है?", "session_id": "u4-clarify",
+        "conversational": True, "language": "hi",
+    }).json()
+    assert r["status"] == "clarify"
+    assert "शहर" in (r["evidence"].get("clarification") or "")
+
+
+def test_u4_six_turn_answers_are_distinct(monkeypatch):
+    """The required six-turn thread produces six non-identical answers."""
+    rainy = _calm_evidence_with_rain().weather
+    _patch(monkeypatch, place="mumbai", bundle=rainy)
+    c = _http(); sid = "u4-six-turns"
+    turns = [
+        ("What is the weather in Mumbai tomorrow?", "en"),
+        ("will it rain?", "en"),
+        ("should I carry an umbrella?", "en"),
+        ("क्या यात्रा सुरक्षित है?", "hi"),
+        ("Pune?", "mr"),
+        ("tomorrow morning?", "en"),
+    ]
+    texts = []
+    for msg, lang in turns:
+        r = c.post("/api/query", json={
+            "message": msg, "session_id": sid, "conversational": True,
+            "language": lang, "include_pipeline": False,
+        }).json()
+        text = (r.get("answer") or {}).get("text") or r["evidence"].get("clarification") or ""
+        texts.append(text)
+    assert len(set(texts)) == 6, texts

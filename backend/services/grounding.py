@@ -104,8 +104,13 @@ PRESENT_TENSE_CUES = ("now", "currently", "right now", "at this moment", "as of"
 # chance of rain right now" must still be caught when 100% exists only in a day block.
 DAY_FRAME_CUES = ("tomorrow", "day after", "forecast", "expected", "likely", "will",
                   "today", "tonight", "later", "yesterday", "morning", "afternoon", "evening",
-                  "24 hour", "48 hour", "next ")
-CLAUSE_SPLIT_RE = re.compile(r"[;!?\n]|\.(?=\s|$)|\b(?:but|while|however|whereas)\b")
+                  "24 hour", "48 hour", "next ",
+                  # U4 localized forecast framing (Hindi/Marathi): mark forecast clauses so a
+                  # day-block number quoted alongside कल/उद्या/पूर्वानुमान/अंदाज is not misread
+                  # as a present-tense observation.
+                  "कल", "उद्या", "आज", "पूर्वानुमान", "अंदाज", "संभावना", "शक्यता")
+# U4: the Devanagari danda (।, U+0964) ends a Hindi/Marathi sentence just like a period.
+CLAUSE_SPLIT_RE = re.compile(r"[;!?\n\u0964]|\.(?=\s|$)|\b(?:but|while|however|whereas)\b")
 HEDGE_PHRASES = (
     "could not be verified", "could not verify", "not be verified", "could not be confirmed",
     "could not be established", "unable to verify", "not verified", "insufficient", "unavailable",

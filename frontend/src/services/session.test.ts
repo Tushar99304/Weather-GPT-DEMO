@@ -67,3 +67,22 @@ describe('shared session id', () => {
     expect(new Set(repeated).size).toBe(1);
   });
 });
+
+describe('response language is forwarded to the backend query', () => {
+  it('sends the voice-selected language as structured metadata (Hindi)', async () => {
+    const { queryBackend } = await import('./backendClient');
+    await queryBackend({ message: 'क्या कल बारिश होगी?', language: 'hi' });
+    const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.language).toBe('hi');
+    expect(body.session_id).toBeTruthy();
+  });
+
+  it('forwards Hinglish as its own language (not coerced to English)', async () => {
+    const { queryBackend } = await import('./backendClient');
+    await queryBackend({ message: 'kal Mumbai mein baarish hogi kya?', language: 'hinglish' });
+    const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.language).toBe('hinglish');
+  });
+});

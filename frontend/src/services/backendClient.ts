@@ -78,6 +78,12 @@ export interface QueryParams {
    * neither read nor write the active conversation's memory.
    */
   conversational?: boolean;
+  /**
+   * U4: the user's selected response language ('en' | 'hi' | 'mr' | 'hinglish'). Sent as
+   * structured request metadata; the backend places it inside the single Evidence object
+   * (ev.request.response_language) so the answer AND the TTS voice follow the choice.
+   */
+  language?: 'en' | 'hi' | 'mr' | 'hinglish' | string;
 }
 
 /** POST /api/query — the full grounded pipeline (chat, dashboard, advisory, alerts). */
@@ -93,6 +99,7 @@ export function queryBackend(params: QueryParams): Promise<BackendQueryResponse>
       include_pipeline: params.includePipeline ?? false,
       session_id: params.sessionId ?? getSessionId(),
       conversational: params.conversational ?? true,
+      language: params.language,
     }),
   });
 }

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useVoiceRecognition } from '../../hooks/useVoiceRecognition';
 import { askWeatherGPT } from '../../services/chatService';
+import { ttsLang } from '../../services/voiceService';
 import { useWeatherStore } from '../../store/useWeatherStore';
 import { Mic, Volume2, Sparkles, Languages } from 'lucide-react';
 import { EvidencePanel } from '../common/EvidencePanel';
@@ -29,7 +30,9 @@ export const VoiceControl: React.FC = () => {
       const res = await askWeatherGPT(
         capturedTranscript,
         `${currentLocation.name}, ${currentLocation.state}`,
-        selectedLang === 'hinglish' ? 'en' : selectedLang,
+        // U4: pass the selection straight through — Hinglish IS a response language (Romanized
+        // Hindi), not English; the backend auto-detects when a transcript doesn't match it.
+        selectedLang,
         preferences.demoMode,
         undefined,
         // U3: the SAME shared session as Chat — never a per-request id.
@@ -40,9 +43,8 @@ export const VoiceControl: React.FC = () => {
         evidence: res.evidence,
       });
 
-      // Automatically speak out the grounded response
-      const langCode = selectedLang === 'hi' || selectedLang === 'hinglish' ? 'hi-IN' : selectedLang === 'mr' ? 'mr-IN' : 'en-IN';
-      speakText(res.message, langCode);
+      // Automatically speak out the grounded response in the matching locale (hi-IN/mr-IN/en-IN).
+      speakText(res.message, ttsLang(selectedLang));
     } catch {
       setLastResponse({
         text: 'Sorry — the WeatherGPT backend could not be reached, so I will not invent an answer. Please try again shortly.',
@@ -150,7 +152,7 @@ export const VoiceControl: React.FC = () => {
               <Sparkles className="w-4 h-4" /> WeatherGPT Response
             </span>
             <button
-              onClick={() => speakText(lastResponse.text)}
+              onClick={() => speakText(lastResponse.text, ttsLang(selectedLang))}
               className="p-1.5 rounded-lg bg-white text-[#2E7D5B] hover:bg-[#2E7D5B] hover:text-white transition-colors"
               title="Replay Voice Response"
             >

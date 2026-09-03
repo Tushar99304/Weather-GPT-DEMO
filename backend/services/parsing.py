@@ -345,3 +345,39 @@ def parse(text: str, today: Optional[dt.date] = None) -> ParsedQuery:
         target_date=target_date,
         notes=notes,
     )
+
+
+# ---- U4: response-language detection -------------------------------------- #
+# The user's chosen voice/UI language is the primary signal; the message text is
+# the fallback (auto-detect when the caller did not pass an explicit choice).
+_DEVANAGARI = re.compile(r"[\u0900-\u097F]")
+# Strong Marathi-only cues (vs. Hindi which shares the Devanagari script).
+_MR_CUES = re.compile(r"पडेल का|पाऊस पड|कसे आहे|आहे का|सांगा|तपासू|सध्या|उद्या")
+# Romanized colloquial Hindi markers -> "hinglish" (answer in the same Roman style).
+_HINGLISH_MARKERS = re.compile(
+    r"\b(kya|hai|hain|kal|aaj|baarish|barish|barasat|mausam|jaldi|karega|hogi|hoga|"
+    r"chahiye|chahie|mein|me|ka|ki|ke|nahi|nahin|batao|bata|sunao|accha|thik|karo|"
+    r"lagta|lagti|dekh|dekhna|pucho|hai\?)\b",
+    re.IGNORECASE,
+)
+
+
+def detect_response_language(text: Optional[str], explicit: Optional[str] = None) -> str:
+    """Which language the assistant should answer in for this turn.
+
+    An explicit UI/voice choice (``en|hi|mr|hinglish``) always wins. Otherwise we infer it
+    from the message: Devanagari -> Hindi (Marathi only when strong Marathi cues are
+    present), Romanized Hindi markers -> Hinglish, else English. This is a presentation
+    decision; weather values/numbers are always preserved verbatim.
+    """
+    choices = {"en", "hi", "mr", "hinglish"}
+    if explicit and explicit.strip().lower() in choices:
+        return explicit.strip().lower()
+    t = (text or "").strip()
+    if not t:
+        return "en"
+    if _DEVANAGARI.search(t):
+        return "mr" if _MR_CUES.search(t) else "hi"
+    if _HINGLISH_MARKERS.search(t.lower()):
+        return "hinglish"
+    return "en"

@@ -83,6 +83,19 @@ your entire answer, so do not test them:
     State the weather-related risk and what the evidence is.
 12. No greetings, no advice beyond the data, no bullet lists, no markdown, no disclaimers added
     to the ones above. Keep the answer under 60 words.
+
+Conversation metadata (inside evidence.request):
+13. evidence.request.topic tells you the practical question THIS turn asks: weather_summary,
+    rain_prediction, umbrella_advice, travel_safety, outdoor_suitability, temperature,
+    official_alert, or historical_climate. Answer THAT question directly — the same evidence can
+    support different answers (rain amount vs. umbrella advice vs. travel risk); do not always
+    lead with a generic weather summary.
+14. evidence.request.response_language sets the language of "answer": "en" = Indian English,
+    "hi" = Hindi (Devanagari), "mr" = Marathi (Devanagari), "hinglish" = natural Romanized
+    colloquial Hindi (Latin script, e.g. "Kal Mumbai mein baarish ho sakti hai"). Keep every
+    number, unit, and place value exactly as in the evidence (25.4 °C, 5 mm, 100%, risk words);
+    only the surrounding prose changes language. The JSON keys and source/risk/quality values
+    stay English.
 """
 
 # The regeneration message: exact failures, one stricter attempt, same evidence object.
@@ -268,7 +281,10 @@ def _answered_block(ev: Evidence) -> Tuple[Optional[str], Optional[Dict[str, Any
     day = validation_service.answered_day(ev.weather, timeframe, request.get("target_date"))
     if day is None:
         return None, None
-    return day.date, day.model_dump(mode="json")
+    # Prefer the human label ("Tomorrow", "Today") over the ISO date for prose; the block dict
+    # still carries the exact date for grounding.
+    phrase = getattr(day, "label", None) or day.date
+    return phrase, day.model_dump(mode="json")
 
 
 def _measurement_sentence(ev: Evidence) -> str:
@@ -289,7 +305,7 @@ def _measurement_sentence(ev: Evidence) -> str:
             bits.append(f"wind up to {_fmt(block['wind_speed_max_kmh'])} km/h")
         if block.get("condition"):
             bits.append(str(block["condition"]))
-        label = f"For {date}" if date else "For the requested day"
+        label = f"For {str(date).lower()}" if date else "For the requested day"
         return f"{label}: " + (", ".join(bits) if bits else "no numeric values were returned") + "."
     cur = ev.weather.current if ev.weather else None
     if cur is None:
@@ -313,6 +329,261 @@ def _measurement_sentence(ev: Evidence) -> str:
     return "Currently " + ", ".join(bits) + f"{when}."
 
 
+# --------------------------------------------------------------------------- #
+# U4: topic-aware + language-aware deterministic answer
+# --------------------------------------------------------------------------- #
+_TOPIC_LABELS = {
+    "weather_summary": "weather_summary", "rain_prediction": "rain_prediction",
+    "umbrella_advice": "umbrella_advice", "travel_safety": "travel_safety",
+    "outdoor_suitability": "outdoor_suitability", "temperature": "temperature",
+    "official_alert": "official_alert", "historical_climate": "historical_climate",
+}
+_LANGS = {"en", "hi", "mr", "hinglish"}
+
+
+def _topic_of(ev: Evidence) -> str:
+    topic = str((ev.request or {}).get("topic") or "other")
+    return topic if topic in _TOPIC_LABELS else "other"
+
+
+def _language_of(ev: Evidence) -> str:
+    lang = str((ev.request or {}).get("response_language") or "en").lower()
+    return lang if lang in _LANGS else "en"
+
+
+def _place_name(ev: Evidence) -> str:
+    loc = ev.location
+    if loc is not None and loc.name:
+        return loc.name
+    lt = (ev.request or {}).get("location_text")
+    return str(lt) if lt else "this location"
+
+
+def _rain_numbers(ev: Evidence) -> Tuple[Optional[Any], Optional[Any], str]:
+    """(mm, chance%, day phrase) for the answered day — values copied, never computed."""
+    _date, block = _answered_block(ev)
+    if block is not None:
+        return (block.get("precipitation_sum_mm"),
+                block.get("precipitation_probability_max_pct"),
+                str(_date) if _date else "the requested day")
+    cur = ev.weather.current if ev.weather else None
+    if cur is not None:
+        return cur.precipitation_mm, None, "right now"
+    return None, None, "right now"
+
+
+def _risk_word(ev: Evidence) -> str:
+    if ev.advisory is not None:
+        return str(ev.advisory.risk_level or "UNCERTAIN")
+    return str(ev.risk or "UNCERTAIN")
+
+
+def _topic_lead(ev: Evidence) -> Optional[str]:
+    """A short, topic-specific, evidence-grounded opening sentence for the deterministic answer.
+
+    Every value is copied from the same day/current block the rest of the answer uses, and every
+    hedge is conditional on a value existing, so it cannot invent a number. Returns None for
+    abstentions/topics without a dedicated opener (the caller falls back to the generic text).
+    """
+    topic = _topic_of(ev)
+    lang = _language_of(ev)
+    place = _place_name(ev)
+    mm, chance, day = _rain_numbers(ev)
+    risk = _risk_word(ev)
+    active_alert = any(a.validity == "active" for a in (ev.alerts.items or []))
+    alerts_unknown = ev.alerts.state in ("unavailable", "not_checked")
+    day_word = "tomorrow" if str(day).lower().startswith("tomorrow") else str(day)
+    hi_day = "कल" if day_word == "tomorrow" else day_word
+    mr_day = "उद्या" if day_word == "tomorrow" else day_word
+
+    # English openers --------------------------------------------------------- #
+    if lang in ("en", "hinglish"):
+        when = f"{day_word} " if str(day).lower() != "right now" else ""
+        if topic == "rain_prediction":
+            if mm is None and chance is None:
+                return "I could not verify a rainfall amount for that period."
+            likely = (chance is not None and float(chance) >= 50) or (mm is not None and float(mm) >= 1.0)
+            bits = []
+            if mm is not None:
+                bits.append(f"around {mm} mm of rain")
+            if chance is not None:
+                bits.append(f"a {chance}% chance of precipitation")
+            detail = ", ".join(bits) if bits else "no measurable rainfall in the forecast"
+            head = "Yes, rain is likely" if likely else "Rain is unlikely"
+            return f"{head} {when}in {place} — the forecast shows {detail}."
+        if topic == "umbrella_advice":
+            if mm is None and chance is None:
+                return "I couldn't verify the rainfall forecast, so I can't confidently advise on an umbrella."
+            likely = (chance is not None and float(chance) >= 50) or (mm is not None and float(mm) >= 1.0)
+            bits = []
+            if mm is not None:
+                bits.append(f"around {mm} mm expected")
+            if chance is not None:
+                bits.append(f"a {chance}% chance of rain")
+            detail = " (" + ", ".join(bits) + ")" if bits else ""
+            if likely:
+                return f"Yes, I would carry an umbrella {when}in {place}{detail}."
+            return f"You probably will not need an umbrella {when}in {place}{detail}."
+        if topic == "travel_safety":
+            if active_alert:
+                return (f"Travel is NOT currently advisable in {place}: there is an active official "
+                        f"alert and the weather-related risk is {risk}.")
+            if alerts_unknown:
+                return (f"Based on the current evidence, travel in {place} has {risk} weather-related "
+                        f"risk; the official alert service could not be verified at this time.")
+            return (f"Travel looks relatively safe in {place} based on the current evidence, with {risk} "
+                    f"weather-related risk and no active official alert found.")
+        if topic == "temperature":
+            cur = ev.weather.current if ev.weather else None
+            _d, block = _answered_block(ev)
+            if block and (block.get("temperature_max_c") is not None):
+                return (f"{day_word.capitalize()} in {place}: about {_fmt(block['temperature_min_c'])}–"
+                        f"{_fmt(block['temperature_max_c'])} °C.")
+            if cur and cur.temperature_c is not None:
+                feels = f", feels like {_fmt(cur.apparent_temperature_c)} °C" if cur.apparent_temperature_c is not None else ""
+                return f"It is {_fmt(cur.temperature_c)} °C in {place} right now{feels}."
+            return None
+        if topic == "weather_summary":
+            _sd, sblock = _answered_block(ev)
+            if sblock and sblock.get("condition"):
+                cond = str(sblock.get("condition") or "").strip()
+                tmax = sblock.get("temperature_max_c")
+                tpart = f", about {_fmt(sblock['temperature_min_c'])}–{_fmt(tmax)} °C" if tmax is not None else ""
+                return f"The forecast for {day_word} in {place}: {cond.lower()}{tpart}."
+            cur = ev.weather.current if ev.weather else None
+            if cur and cur.temperature_c is not None:
+                return f"It is {_fmt(cur.temperature_c)} °C in {place} right now."
+            return None
+        return None
+
+    # Hindi openers ----------------------------------------------------------- #
+    if lang == "hi":
+        if topic == "rain_prediction":
+            if mm is None and chance is None:
+                return "इस अवधि के लिए बारिश की मात्रा सत्यापित नहीं हो सकी।"
+            likely = (chance is not None and float(chance) >= 50) or (mm is not None and float(mm) >= 1.0)
+            bits = []
+            if mm is not None:
+                bits.append(f"लगभग {mm} मिमी बारिश")
+            if chance is not None:
+                bits.append(f"वर्षा की संभावना {chance}%")
+            detail = ", ".join(bits)
+            head = "हाँ, बारिश की संभावना बहुत अधिक है" if likely else "बारिश की संभावना कम है"
+            return f"{head} — {hi_day} {place} में {detail}।"
+        if topic == "umbrella_advice":
+            if mm is None and chance is None:
+                return "बारिश का पूर्वानुमान सत्यापित नहीं हो सका, इसलिए छाते की सलाह नहीं दे सकता।"
+            likely = (chance is not None and float(chance) >= 50) or (mm is not None and float(mm) >= 1.0)
+            bits = [f"लगभग {mm} मिमी" for _ in [0] if mm is not None]
+            if chance is not None:
+                bits.append(f"{chance}% संभावना")
+            detail = (" (" + ", ".join(bits) + ")") if bits else ""
+            if likely:
+                return f"हाँ, {hi_day} {place} में छाता साथ रखें{detail}।"
+            return f"{hi_day} {place} में छाते की ज़रूरत कम लगती है{detail}।"
+        if topic == "travel_safety":
+            if active_alert:
+                return (f"{place} में अभी यात्रा उचित नहीं है: एक सक्रिय आधिकारिक चेतावनी है और "
+                        f"मौसम-संबंधी जोखिम {risk} है।")
+            if alerts_unknown:
+                return (f"मौजूदा साक्ष्य के अनुसार {place} में यात्रा का मौसम-संबंधी जोखिम {risk} है; "
+                        f"इस समय आधिकारिक चेतावनी सेवा सत्यापित नहीं हो सकी।")
+            return (f"मौजूदा साक्ष्य के अनुसार {place} में यात्रा अपेक्षाकृत सुरक्षित है — मौसम-संबंधी "
+                    f"जोखिम {risk} है और कोई सक्रिय आधिकारिक चेतावनी नहीं मिली।")
+        if topic == "temperature":
+            cur = ev.weather.current if ev.weather else None
+            _d, block = _answered_block(ev)
+            if block and block.get("temperature_max_c") is not None:
+                return f"{hi_day} {place} में तापमान लगभग {_fmt(block['temperature_min_c'])}–{_fmt(block['temperature_max_c'])} °C।"
+            if cur and cur.temperature_c is not None:
+                return f"{place} में अभी तापमान {_fmt(cur.temperature_c)} °C है।"
+            return None
+        if topic == "weather_summary":
+            _sd, sblock = _answered_block(ev)
+            if sblock and sblock.get("temperature_max_c") is not None:
+                return (f"{hi_day} {place} में तापमान लगभग {_fmt(sblock['temperature_min_c'])}–"
+                        f"{_fmt(sblock['temperature_max_c'])} °C रहने का अनुमान है।")
+            cur = ev.weather.current if ev.weather else None
+            if cur and cur.temperature_c is not None:
+                return f"{place} में अभी तापमान {_fmt(cur.temperature_c)} °C है।"
+            return None
+        return None
+
+    # Marathi openers --------------------------------------------------------- #
+    if lang == "mr":
+        if topic == "rain_prediction":
+            if mm is None and chance is None:
+                return "त्या कालावधीसाठी पावसाचे प्रमाण पडताळता आले नाही."
+            likely = (chance is not None and float(chance) >= 50) or (mm is not None and float(mm) >= 1.0)
+            bits = []
+            if mm is not None:
+                bits.append(f"सुमारे {mm} मिमी पाऊस")
+            if chance is not None:
+                bits.append(f"पावसाची शक्यता {chance}%")
+            detail = ", ".join(bits)
+            head = "होय, पावसाची शक्यता जास्त आहे" if likely else "पावसाची शक्यता कमी आहे"
+            return f"{head} — {mr_day} {place} मध्ये {detail}."
+        if topic == "umbrella_advice":
+            if mm is None and chance is None:
+                return "पावसाचा अंदाज पडताळता आला नाही, त्यामुळे छत्रीबद्दल सल्ला देता येत नाही."
+            likely = (chance is not None and float(chance) >= 50) or (mm is not None and float(mm) >= 1.0)
+            if likely:
+                return f"होय, {mr_day} {place} मध्ये छत्री बाळगा."
+            return f"{mr_day} {place} मध्ये छत्रीची गरज भासणार नाही."
+        if topic == "travel_safety":
+            if active_alert:
+                return (f"{place} मध्ये सध्या प्रवास योग्य नाही: एक सक्रिय अधिकृत चेतावणी आहे आणि "
+                        f"हवामान-संबंधित धोका {risk} आहे.")
+            if alerts_unknown:
+                return (f"सध्याच्या पुराव्यानुसार {place} मध्ये प्रवासाचा हवामान-संबंधित धोका {risk} आहे; "
+                        f"अधिकृत चेतावणी सेवा या वेळी पडताळता आली नाही.")
+            return (f"सध्याच्या पुराव्यानुसार {place} मध्ये प्रवास तुलनेने सुरक्षित आहे — हवामान-संबंधित "
+                    f"धोका {risk} आहे आणि कोणतीही सक्रिय अधिकृत चेतावणी आढळली नाही.")
+        if topic == "temperature":
+            cur = ev.weather.current if ev.weather else None
+            _d, block = _answered_block(ev)
+            if block and block.get("temperature_max_c") is not None:
+                return f"{mr_day} {place} मध्ये तापमान सुमारे {_fmt(block['temperature_min_c'])}–{_fmt(block['temperature_max_c'])} °C."
+            if cur and cur.temperature_c is not None:
+                return f"{place} मध्ये सध्या तापमान {_fmt(cur.temperature_c)} °C आहे."
+            return None
+        if topic == "weather_summary":
+            _sd, sblock = _answered_block(ev)
+            if sblock and sblock.get("temperature_max_c") is not None:
+                return (f"{mr_day} {place} मध्ये तापमान सुमारे {_fmt(sblock['temperature_min_c'])}–"
+                        f"{_fmt(sblock['temperature_max_c'])} °C राहण्याचा अंदाज आहे.")
+            cur = ev.weather.current if ev.weather else None
+            if cur and cur.temperature_c is not None:
+                return f"{place} मध्ये सध्या तापमान {_fmt(cur.temperature_c)} °C आहे."
+            return None
+        return None
+    return None
+
+
+def _measurement_sentence_localized(ev: Evidence, lang: str) -> str:
+    """A short, value-only factual tail for Hindi/Marathi. Numbers/units stay Latin and
+    unchanged (so grounding sees the exact evidence figures); connective words only are
+    localized. Only temperature is added here — rain mm/probability already appear in the
+    topic lead inside a day-framed clause, and repeating a forecast number in a frameless
+    clause would trip the current-vs-forecast grounding check."""
+    _date, block = _answered_block(ev)
+    if block:
+        pieces: List[str] = []
+        if block.get("temperature_max_c") is not None:
+            pieces.append(
+                f"तापमान {_fmt(block['temperature_min_c'])}–{_fmt(block['temperature_max_c'])} °C"
+            )
+        if pieces:
+            lead = "पूर्वानुमान: " if lang == "hi" else "अंदाज: "
+            return lead + ", ".join(pieces) + "।"
+        return ""
+    cur = ev.weather.current if ev.weather else None
+    if cur is not None and cur.temperature_c is not None:
+        head = "अभी: " if lang == "hi" else "सध्या: "
+        return f"{head}{_fmt(cur.temperature_c)} °C।"
+    return ""
+
+
 def deterministic_payload(ev: Evidence) -> Dict[str, Any]:
     """A grounded answer assembled from evidence values only — no model, no invention.
 
@@ -327,6 +598,13 @@ def deterministic_payload(ev: Evidence) -> Dict[str, Any]:
         "risk": str(ev.advisory.risk_level if ev.advisory else (ev.risk or "UNCERTAIN")),
         "evidence_quality": str(ev.evidence_quality or "LOW"),
     }
+    # A clarification (e.g. "which city?") is a question, not an abstention: return the
+    # already-localized clarification text directly (U4: the question follows the user's
+    # selected voice language).
+    if ev.status == "clarify" and ev.clarification:
+        payload["answer"] = ev.clarification
+        return payload
+
     validation = ev.validation
     if validation is not None and not validation.sufficient:
         reason = validation.failures[0] if validation.failures else (ev.abstain_reason or "")
@@ -348,73 +626,129 @@ def deterministic_payload(ev: Evidence) -> Dict[str, Any]:
             payload["source"] = "no usable source"
         return payload
 
+    response_lang = _language_of(ev)
+    localized = response_lang in ("hi", "mr")
     parts: List[str] = []
+
+    # U4: topic-specific opener FIRST, so a rain/umbrella/travel/temperature question reads as a
+    # direct answer to that question instead of a generic alert/measurement paragraph.
+    lead = _topic_lead(ev)
+    if lead:
+        parts.append(lead)
+
     alerts = ev.alerts
     items = list(alerts.items) if alerts and alerts.items else []
     if items:
-        lead = items[0]
-        desc = " ".join(x for x in (lead.severity, lead.event) if x)
-        if lead.validity == "active":
-            line = f"An official {desc} alert is active for {lead.area_desc or 'this area'}"
-            if lead.expires_at:
-                line += f" until {_stamp(lead.expires_at)}"
+        alert = items[0]
+        desc = " ".join(x for x in (alert.severity, alert.event) if x)
+        if localized:
+            # Localized alert-status line; the authority's verbatim instruction is still attached
+            # unchanged (it is the official text and must not be paraphrased).
+            if alert.validity == "active":
+                line = f"इस क्षेत्र के लिए एक आधिकारिक {desc or 'चेतावनी'} चेतावनी सक्रिय है।" if response_lang == "hi" \
+                    else f"या भागासाठी एक अधिकृत {desc or 'चेतावणी'} चेतावणी सक्रिय आहे."
+            else:
+                line = ("एक आधिकारिक चेतावनी प्रकाशित हुई थी, परंतु स्रोत से यह साबित नहीं होता कि वह अभी सक्रिय है।"
+                        if response_lang == "hi"
+                        else "एक अधिकृत चेतावणी प्रसिद्ध झाली होती, परंतु ती आता सक्रिय आहे हे स्रोतावरून सिद्ध होत नाही.")
+            if alert.instruction:
+                sender = alert.sender or alert.author_name or "the issuing authority"
+                line += (f" {sender} की आधिकारिक हिदायत: " if response_lang == "hi"
+                         else f" {sender} ची अधिकृत सूचना: ")
+                line += f'"{_safe_quote(alert.instruction)}".'
+            if len(items) > 1:
+                line += (f" इस स्थान से {len(items)} सत्यापित आधिकारिक चेतावनियाँ जुड़ी हैं।"
+                         if response_lang == "hi"
+                         else f" या ठिकाणाशी {len(items)} पडताळलेल्या अधिकृत चेतावणी जोडलेल्या आहेत.")
+            parts.append(line)
         else:
-            # U1 boundary: a relevant alert whose temporal window the source left unprovable
-            # (validity == "unknown", e.g. no expiry published) must NOT be sold as "active".
-            # Only alerts.py's classify_validity() may declare an alert active.
-            line = (
-                f"An official {desc} alert naming {lead.area_desc or 'this area'} was published, "
-                f"but the source does not prove it is active right now "
-                f"({_punct(lead.validity_reason or 'temporal window not published')[:-1].lower()})"
-            )
-        line += ". "
-        if lead.headline:
-            line += _punct(lead.headline)
-        if lead.instruction:
-            # U1: the issuing authority's instruction, quoted VERBATIM (never paraphrased, never
-            # invented when absent). Attribution stays attached so it cannot read as our advice.
-            line += (
-                f" Official instruction from "
-                f"{lead.sender or lead.author_name or 'the issuing authority'}: "
-                f'"{_safe_quote(lead.instruction)}".'
-            )
-        if len(items) > 1:
-            line += f" {len(items)} verified official alerts are attached to this location."
-        parts.append(line)
+            if alert.validity == "active":
+                line = f"An official {desc} alert is active for {alert.area_desc or 'this area'}"
+                if alert.expires_at:
+                    line += f" until {_stamp(alert.expires_at)}"
+            else:
+                # U1 boundary: a relevant alert whose temporal window the source left unprovable
+                # (validity == "unknown", e.g. no expiry published) must NOT be sold as "active".
+                # Only alerts.py's classify_validity() may declare an alert active.
+                line = (
+                    f"An official {desc} alert naming {alert.area_desc or 'this area'} was published, "
+                    f"but the source does not prove it is active right now "
+                    f"({_punct(alert.validity_reason or 'temporal window not published')[:-1].lower()})"
+                )
+            line += ". "
+            if alert.headline:
+                line += _punct(alert.headline)
+            if alert.instruction:
+                # U1: the issuing authority's instruction, quoted VERBATIM (never paraphrased, never
+                # invented when absent). Attribution stays attached so it cannot read as our advice.
+                line += (
+                    f" Official instruction from "
+                    f"{alert.sender or alert.author_name or 'the issuing authority'}: "
+                    f'"{_safe_quote(alert.instruction)}".'
+                )
+            if len(items) > 1:
+                line += f" {len(items)} verified official alerts are attached to this location."
+            parts.append(line)
     elif alerts is not None and alerts.state in ("unavailable", "not_checked"):
-        parts.append(
-            "The official alert service could not be verified at this time, so whether any alert "
-            "is active for this location is unknown and no conclusion about alerts can be drawn "
-            "from this answer."
-        )
+        if response_lang == "hi":
+            parts.append("इस समय आधिकारिक चेतावनी सेवा सत्यापित नहीं हो सकी, इसलिए इस स्थान के लिए कोई चेतावनी सक्रिय है या नहीं, यह अज्ञात है।")
+        elif response_lang == "mr":
+            parts.append("या वेळी अधिकृत चेतावणी सेवा पडताळता आली नाही, त्यामुळे या ठिकाणासाठी चेतावणी सक्रिय आहे की नाही हे अनिश्चित आहे.")
+        else:
+            parts.append(
+                "The official alert service could not be verified at this time, so whether any alert "
+                "is active for this location is unknown and no conclusion about alerts can be drawn "
+                "from this answer."
+            )
     elif alerts is not None and alerts.state == "checked":
         when = f" at {_stamp(alerts.checked_at_utc)}" if alerts.checked_at_utc \
             else " at the time of the check"
-        parts.append(
-            f"No active official alert was verifiably tied to this location when SACHET was checked{when};"
-            " that is a checked result, not a promise that none exists."
-        )
+        if response_lang == "hi":
+            parts.append("SACHET जाँच में इस स्थान के लिए कोई सक्रिय आधिकारिक चेतावनी नहीं मिली "
+                         "(यह जाँच का परिणाम है, यह गारंटी नहीं कि कोई चेतावनी नहीं है)।")
+        elif response_lang == "mr":
+            parts.append("SACHET तपासणीत या ठिकाणासाठी कोणतीही सक्रिय अधिकृत चेतावणी आढळली नाही "
+                         "(हा तपासणीचा निकाल आहे, चेतावणी नाही याची खात्री नाही).")
+        else:
+            parts.append(
+                f"No active official alert was verifiably tied to this location when SACHET was checked{when};"
+                " that is a checked result, not a promise that none exists."
+            )
 
-    parts.append(_measurement_sentence(ev))
+    # Factual measurement tail: localized (temperature only) for hi/mr, full body for en/hinglish.
+    parts.append(_measurement_sentence_localized(ev, response_lang) if localized
+                 else _measurement_sentence(ev))
 
     if ev.advisory is not None and ev.advisory.headline:
         score = (ev.quality_breakdown or {}).get("score")
         line = ev.advisory.headline
         if score is not None:
             line += f" Evidence quality {payload['evidence_quality']} ({_fmt(score)}/100)."
-        parts.append(line)
+        if not localized:
+            parts.append(line)
+        # hi/mr: the travel-safety topic lead already states the risk in-language; the English
+        # advisory headline is skipped so no English sentence bleeds into a Devanagari answer.
     # validation.warnings are deliberately NOT inlined: they quote the wording they warn about
     # ("...NOT the same as 'no alert exists'"), and a sentence that quotes a forbidden phrase in
     # the fallback would trip the same check the LLM is held to. The evidence panel shows them.
 
     text = re.sub(r"\s+", " ", " ".join(part for part in parts if part)).strip()
-    if not text.endswith((".", "!", "?")):
-        text += "."
-    trailer = f"Source: {payload['source']}"
-    if payload["timestamp"]:
-        trailer += f", as of {_stamp(payload['timestamp'])}."
+    if not text.endswith((".", "!", "?", "।")):
+        text += "।" if localized else "."
+    if localized:
+        # Localized source trailer ("स्रोत: … तक।" / "… पर्यंत।").
+        trailer = f"स्रोत: {payload['source']}"
+        if payload["timestamp"]:
+            end_word = "तक" if response_lang == "hi" else "पर्यंत"
+            trailer += f", {_stamp(payload['timestamp'])} {end_word}।"
+        else:
+            trailer += "।"
     else:
-        trailer += "."
+        trailer = f"Source: {payload['source']}"
+        if payload["timestamp"]:
+            trailer += f", as of {_stamp(payload['timestamp'])}."
+        else:
+            trailer += "."
     payload["answer"] = f"{text} {trailer}"
     return payload
 

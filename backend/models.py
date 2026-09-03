@@ -402,6 +402,9 @@ class QueryRequest(BaseModel):
     # pass False: they neither READ the conversation memory nor WRITE it, so they can never
     # pollute or hijack the active conversation.
     conversational: bool = True
+    # U4: the user's chosen response language ("en" | "hi" | "mr" | "hinglish"). Rides inside the
+    # Evidence as ev.request.response_language; when null it is auto-detected from the message.
+    language: Optional[str] = None
 
 
 # U3: fine-grained conversational TOPIC (what the user is practically asking about). This is a

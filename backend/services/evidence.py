@@ -78,6 +78,7 @@ def build_evidence(
     geo: GeocodeResult,
     weather: Optional[WeatherBundle],
     alerts: Optional[AlertsEvidence] = None,
+    response_language: Optional[str] = None,
 ) -> Evidence:
     ev = Evidence(
         request={
@@ -88,6 +89,11 @@ def build_evidence(
             "timeframe_reason": parsed.timeframe_reason,
             "target_date": parsed.target_date,
             "location_text": parsed.location_text,
+            # U4: conversational metadata rides INSIDE the single Evidence object (never as a
+            # separate prompt/history): topic drives the current answer, response_language the
+            # language the assistant answers in (and the UI speaks it in).
+            "topic": getattr(parsed, "topic", "other"),
+            "response_language": response_language or "en",
         },
         location=geo.location,
         weather=weather,
